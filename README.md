@@ -81,4 +81,5 @@ ProcessDebugPort != 0: no
 Hardware breakpoints: YES
 Software breakpoint detected at address: 0x7FF6F1234567
 
-Final result: Debugger detected!```
+Final result: Debugger detected!
+```
