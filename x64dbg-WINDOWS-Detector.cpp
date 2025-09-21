@@ -232,28 +232,110 @@ int main()
 
     std::cout << "\nFinal result: " << (anyDetected ? "Debugger detected!" : "No debugger detected") << "\n";
 
-    std::wstring secret = L"1337";
+    std::wstring secretA = L"1";
+    std::wstring secretB = L"3";
+    std::wstring secretC = L"3";
+    std::wstring secretD = L"7";
+
+    std::wstring legitimateCopyA = L"L";
+    std::wstring legitimateCopyB = L"e";
+    std::wstring legitimateCopyC = L"g";
+    std::wstring legitimateCopyD = L"i";
+    std::wstring legitimateCopyE = L"t";
+    std::wstring legitimateCopyF = L"i";
+    std::wstring legitimateCopyG = L"m";
+    std::wstring legitimateCopyH = L"a";
+    std::wstring legitimateCopyI = L"t";
+    std::wstring legitimateCopyJ = L"e";
+    std::wstring legitimateCopyK = L" ";
+    std::wstring legitimateCopyL = L"C";
+    std::wstring legitimateCopyM = L"o";
+    std::wstring legitimateCopyN = L"p";
+    std::wstring legitimateCopyO = L"y";
+    std::wstring illlegitimateCopyA = L"I";
+    std::wstring illlegitimateCopyB = L"l";
+    std::wstring illlegitimateCopyC = L"l";
+    std::wstring illlegitimateCopyD = L"e";
+    std::wstring illlegitimateCopyE = L"g";
+    std::wstring illlegitimateCopyF = L"i";
+    std::wstring illlegitimateCopyG = L"t";
+    std::wstring illlegitimateCopyH = L"i";
+    std::wstring illlegitimateCopyI = L"m";
+    std::wstring illlegitimateCopyJ = L"a";
+    std::wstring illlegitimateCopyK = L"t";
+    std::wstring illlegitimateCopyL = L"e";
+    std::wstring illlegitimateCopyM = L" ";
+    std::wstring illlegitimateCopyN = L"C";
+    std::wstring illlegitimateCopyO = L"o";
+    std::wstring illlegitimateCopyP = L"p";
+    std::wstring illlegitimateCopyQ = L"y";
 
     if (!anyDetected)
     {
-        PrintWide(L"Legitimate Copy with code: " + secret);
+        std::wstring inputSecret;
+        std::wcout << L"Enter your secret key: ";
+        std::getline(std::wcin, inputSecret);
+
+        if (inputSecret == secretA + secretB + secretC + secretD)
+        {
+            PrintWide(legitimateCopyA + legitimateCopyB + legitimateCopyC + legitimateCopyD + legitimateCopyE +
+                legitimateCopyF + legitimateCopyG + legitimateCopyH + legitimateCopyI + legitimateCopyJ + legitimateCopyK +
+                legitimateCopyL + legitimateCopyM + legitimateCopyN + legitimateCopyO);
+        }
+        else {
+            PrintWide(illlegitimateCopyA + illlegitimateCopyB + illlegitimateCopyC + illlegitimateCopyD + illlegitimateCopyE +
+                illlegitimateCopyF + illlegitimateCopyG + illlegitimateCopyH + illlegitimateCopyI + illlegitimateCopyJ + illlegitimateCopyK +
+                illlegitimateCopyL + illlegitimateCopyM + illlegitimateCopyN + illlegitimateCopyO + illlegitimateCopyP + illlegitimateCopyQ);
+        }
     }
     else {
-        if (!secret.empty()) {
-            SecureZeroMemory(&secret[0], secret.size() * sizeof(wchar_t));
-            secret.clear();
-            secret.shrink_to_fit();
+        if (!secretA.empty()) {
+            SecureZeroMemory(&secretA[0], secretA.size() * sizeof(wchar_t));
+            secretA.clear();
+            secretA.shrink_to_fit();
+        }
+        if (!secretB.empty()) {
+            SecureZeroMemory(&secretB[0], secretB.size() * sizeof(wchar_t));
+            secretB.clear();
+            secretB.shrink_to_fit();
+        }
+        if (!secretC.empty()) {
+            SecureZeroMemory(&secretC[0], secretC.size() * sizeof(wchar_t));
+            secretC.clear();
+            secretC.shrink_to_fit();
+        }
+        if (!secretD.empty()) {
+            SecureZeroMemory(&secretD[0], secretD.size() * sizeof(wchar_t));
+            secretD.clear();
+            secretD.shrink_to_fit();
         }
 
-        PrintWide(L"Illegitimate Copy");
+        PrintWide(illlegitimateCopyA + illlegitimateCopyB + illlegitimateCopyC + illlegitimateCopyD + illlegitimateCopyE +
+            illlegitimateCopyF + illlegitimateCopyG + illlegitimateCopyH + illlegitimateCopyI + illlegitimateCopyJ + illlegitimateCopyK +
+            illlegitimateCopyL + illlegitimateCopyM + illlegitimateCopyN + illlegitimateCopyO + illlegitimateCopyP + illlegitimateCopyQ);
 
         ExitProcess(1);
     }
 
-    if (!secret.empty()) {
-        SecureZeroMemory(&secret[0], secret.size() * sizeof(wchar_t));
-        secret.clear();
-        secret.shrink_to_fit();
+    if (!secretA.empty()) {
+        SecureZeroMemory(&secretA[0], secretA.size() * sizeof(wchar_t));
+        secretA.clear();
+        secretA.shrink_to_fit();
+    }
+    if (!secretB.empty()) {
+        SecureZeroMemory(&secretB[0], secretB.size() * sizeof(wchar_t));
+        secretB.clear();
+        secretB.shrink_to_fit();
+    }
+    if (!secretC.empty()) {
+        SecureZeroMemory(&secretC[0], secretC.size() * sizeof(wchar_t));
+        secretC.clear();
+        secretC.shrink_to_fit();
+    }
+    if (!secretD.empty()) {
+        SecureZeroMemory(&secretD[0], secretD.size() * sizeof(wchar_t));
+        secretD.clear();
+        secretD.shrink_to_fit();
     }
 
     std::cin.get();
