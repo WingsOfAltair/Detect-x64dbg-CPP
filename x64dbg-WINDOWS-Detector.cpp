@@ -19,6 +19,22 @@ std::string safe_getenv(const char* name)
         return val;
     }
     return {};
+}   
+
+// Helper to safely print a wide (UTF-16) string to Windows console.
+void PrintWide(const std::wstring& s)
+{
+    HANDLE hOut = GetStdHandle(STD_OUTPUT_HANDLE);
+    if (hOut == INVALID_HANDLE_VALUE || hOut == nullptr) {
+        // fallback to narrow output
+        std::wcout << s << std::endl;
+        return;
+    }
+    DWORD written = 0;
+    WriteConsoleW(hOut, s.c_str(), static_cast<DWORD>(s.size()), &written, nullptr);
+    // write a newline
+    const wchar_t nl = L'\n';
+    WriteConsoleW(hOut, &nl, 1, &written, nullptr);
 }
 
 bool anti_debug_env_enabled()
@@ -215,6 +231,30 @@ int main()
     }
 
     std::cout << "\nFinal result: " << (anyDetected ? "Debugger detected!" : "No debugger detected") << "\n";
+
+    std::wstring secret = L"1337";
+
+    if (!anyDetected)
+    {
+        PrintWide(L"Legitimate Copy with code: " + secret);
+    }
+    else {
+        if (!secret.empty()) {
+            SecureZeroMemory(&secret[0], secret.size() * sizeof(wchar_t));
+            secret.clear();
+            secret.shrink_to_fit();
+        }
+
+        PrintWide(L"Illegitimate Copy");
+
+        ExitProcess(1);
+    }
+
+    if (!secret.empty()) {
+        SecureZeroMemory(&secret[0], secret.size() * sizeof(wchar_t));
+        secret.clear();
+        secret.shrink_to_fit();
+    }
 
     std::cin.get();
 
