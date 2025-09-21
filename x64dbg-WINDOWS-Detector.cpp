@@ -280,10 +280,6 @@ int wmain()
     {
         if (check_software_breakpoint(addr))
         {
-            // print raw pointer address in hex
-            wchar_t buf[64];
-            swprintf_s(buf, L"Software breakpoint detected at address: 0x%p", addr);
-            PrintWide(buf);
             anyDetected = true;
         }
     }
@@ -299,11 +295,17 @@ int wmain()
     std::wstring illegitimateParts[] = {
         L"I",L"l",L"l",L"e",L"g",L"i",L"t",L"i",L"m",L"a",L"t",L"e",L" ",L"C",L"o",L"p",L"y"
     };
+    std::wstring enterSecretKeyParts[] = {
+        L"E",L"n",L"t",L"e",L"r",L" ",L"y",L"o",L"u",L"r",L" ",L"s",L"e",L"c",L"r",L"e",L"t", L" ", L"k", L"e", L"y", L":", L" "
+    };
 
     if (!anyDetected)
     {
         std::wstring inputSecret;
-        PrintWide(L"Enter your secret key: ");
+        std::vector<std::wstring*> wordsToZero;
+        for (auto& s : enterSecretKeyParts) wordsToZero.push_back(&const_cast<std::wstring&>(s));
+        PrintPartsNoConcat(wordsToZero);
+        zero_and_free_parts(wordsToZero);
         std::getline(std::wcin, inputSecret);
 
         bool api_dbg = IsDebuggerPresent() != 0;
