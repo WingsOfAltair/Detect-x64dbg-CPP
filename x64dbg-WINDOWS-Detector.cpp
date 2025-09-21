@@ -196,6 +196,16 @@ void* critical_addresses[] = {
     reinterpret_cast<void*>(&veh_breakpoint_test)
 };
 
+bool constant_time_equal(const std::wstring& a, const std::wstring& b) {
+    if (a.size() != b.size()) return false;
+
+    volatile unsigned diff = 0;  // volatile to discourage optimization
+    for (size_t i = 0; i < a.size(); i++) {
+        diff |= a[i] ^ b[i]; // XOR accumulates differences
+    }
+    return diff == 0;
+}
+
 // --------------------------- Main detector ---------------------------
 int main()
 {
@@ -276,7 +286,46 @@ int main()
         std::wcout << L"Enter your secret key: ";
         std::getline(std::wcin, inputSecret);
 
-        if (inputSecret == secretA + secretB + secretC + secretD)
+        bool api_dbg = IsDebuggerPresent() != 0;
+        bool peb_dbg = check_peb_being_debugged();
+        bool veh_dbg = veh_breakpoint_test();
+        bool ntdll_hooked = check_nt_query_information_process_hooked();
+        bool dbgport = check_process_debug_port_via_nt();
+        bool hw_bp = any_thread_has_hw_breakpoints();
+
+        anyDetected |= api_dbg | peb_dbg | !veh_dbg | ntdll_hooked | dbgport | hw_bp;
+
+        if (anyDetected)
+        {
+            if (!secretA.empty()) {
+                SecureZeroMemory(&secretA[0], secretA.size() * sizeof(wchar_t));
+                secretA.clear();
+                secretA.shrink_to_fit();
+            }
+            if (!secretB.empty()) {
+                SecureZeroMemory(&secretB[0], secretB.size() * sizeof(wchar_t));
+                secretB.clear();
+                secretB.shrink_to_fit();
+            }
+            if (!secretC.empty()) {
+                SecureZeroMemory(&secretC[0], secretC.size() * sizeof(wchar_t));
+                secretC.clear();
+                secretC.shrink_to_fit();
+            }
+            if (!secretD.empty()) {
+                SecureZeroMemory(&secretD[0], secretD.size() * sizeof(wchar_t));
+                secretD.clear();
+                secretD.shrink_to_fit();
+            }
+
+            PrintWide(illlegitimateCopyA + illlegitimateCopyB + illlegitimateCopyC + illlegitimateCopyD + illlegitimateCopyE +
+                illlegitimateCopyF + illlegitimateCopyG + illlegitimateCopyH + illlegitimateCopyI + illlegitimateCopyJ + illlegitimateCopyK +
+                illlegitimateCopyL + illlegitimateCopyM + illlegitimateCopyN + illlegitimateCopyO + illlegitimateCopyP + illlegitimateCopyQ);
+
+            ExitProcess(1);
+        }
+
+        if (constant_time_equal(inputSecret, secretA + secretB + secretC + secretD))
         {
             PrintWide(legitimateCopyA + legitimateCopyB + legitimateCopyC + legitimateCopyD + legitimateCopyE +
                 legitimateCopyF + legitimateCopyG + legitimateCopyH + legitimateCopyI + legitimateCopyJ + legitimateCopyK +
