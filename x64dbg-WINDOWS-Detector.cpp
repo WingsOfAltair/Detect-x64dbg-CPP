@@ -196,15 +196,26 @@ void* critical_addresses[] = {
     reinterpret_cast<void*>(&veh_breakpoint_test)
 };
 
-bool constant_time_equal(const std::wstring& a, const std::wstring& b) {
-    if (a.size() != b.size()) return false;
+bool constant_time_equal_split(const std::wstring& input,
+    const std::wstring& a,
+    const std::wstring& b,
+    const std::wstring& c,
+    const std::wstring& d)
+{
+    std::wstring::size_type totalLen = a.size() + b.size() + c.size() + d.size();
+    if (input.size() != totalLen) return false;
 
-    volatile unsigned diff = 0;  // volatile to discourage optimization
-    for (size_t i = 0; i < a.size(); i++) {
-        diff |= a[i] ^ b[i]; // XOR accumulates differences
-    }
+    volatile unsigned diff = 0;
+    size_t pos = 0;
+
+    for (wchar_t ch : a) diff |= input[pos++] ^ ch;
+    for (wchar_t ch : b) diff |= input[pos++] ^ ch;
+    for (wchar_t ch : c) diff |= input[pos++] ^ ch;
+    for (wchar_t ch : d) diff |= input[pos++] ^ ch;
+
     return diff == 0;
 }
+
 
 // --------------------------- Main detector ---------------------------
 int main()
@@ -325,7 +336,7 @@ int main()
             ExitProcess(1);
         }
 
-        if (constant_time_equal(inputSecret, secretA + secretB + secretC + secretD))
+        if (constant_time_equal_split(inputSecret, secretA, secretB, secretC, secretD))
         {
             PrintWide(legitimateCopyA + legitimateCopyB + legitimateCopyC + legitimateCopyD + legitimateCopyE +
                 legitimateCopyF + legitimateCopyG + legitimateCopyH + legitimateCopyI + legitimateCopyJ + legitimateCopyK +
