@@ -6,7 +6,9 @@
 #include <string>
 #include <algorithm>
 #include <chrono>
-#include <cstdlib>   
+#include <cstdlib>        
+#include <io.h>      // _setmode
+#include <fcntl.h>   // _O_U16TEXT
 
 // --------------------------- Environment helpers ---------------------------
 std::string safe_getenv(const char* name)
@@ -35,6 +37,19 @@ void PrintWide(const std::wstring& s)
     // write a newline
     const wchar_t nl = L'\n';
     WriteConsoleW(hOut, &nl, 1, &written, nullptr);
+}
+
+// Helper to safely print a wide (UTF-16) string to Windows console.
+void PrintWideNoNewLine(const std::wstring& s)
+{
+    HANDLE hOut = GetStdHandle(STD_OUTPUT_HANDLE);
+    if (hOut == INVALID_HANDLE_VALUE || hOut == nullptr) {
+        // fallback to narrow output
+        std::wcout << s << std::endl;
+        return;
+    }
+    DWORD written = 0;
+    WriteConsoleW(hOut, s.c_str(), static_cast<DWORD>(s.size()), &written, nullptr);
 }
 
 bool anti_debug_env_enabled()
@@ -214,13 +229,39 @@ bool constant_time_equal_split(const std::wstring& input,
     for (wchar_t ch : d) diff |= input[pos++] ^ ch;
 
     return diff == 0;
+}  
+
+// securely zero an array of wide-strings (helper)
+void zero_and_free_parts(std::vector<std::wstring*>& parts)
+{
+    for (auto p : parts) {
+        if (!p) continue;
+        std::wstring& s = *p;
+        if (!s.empty()) {
+            SecureZeroMemory(&s[0], s.size() * sizeof(wchar_t));
+            s.clear();
+            s.shrink_to_fit();
+        }
+    }
+}  
+
+// print parts *without concatenating* (avoids temporaries containing full secret)
+void PrintPartsNoConcat(std::vector<std::wstring*>& parts)
+{
+    for (auto p : parts) {
+        if (!p) continue;
+        PrintWideNoNewLine(*p);
+    }
+    PrintWideNoNewLine(L"\n");
 }
 
-
 // --------------------------- Main detector ---------------------------
-int main()
-{
-    std::cout << "X64dbg Multi-layer debugger detection demo (with HW/SW breakpoints)\n\n";
+int wmain()
+{                   // enable UTF-16 I/O on Windows console for wcin/wcout/WriteConsoleW
+    _setmode(_fileno(stdin), _O_U16TEXT);
+    _setmode(_fileno(stdout), _O_U16TEXT);
+
+    PrintWide(L"X64dbg Multi-layer debugger detection demo (with HW/SW breakpoints)\n");
 
     bool anyDetected = false;
 
@@ -232,13 +273,6 @@ int main()
     bool dbgport = check_process_debug_port_via_nt();
     bool hw_bp = any_thread_has_hw_breakpoints();
 
-    std::cout << "IsDebuggerPresent(): " << (api_dbg ? "YES" : "no") << "\n";
-    std::cout << "PEB BeingDebugged:    " << (peb_dbg ? "YES" : "no") << "\n";
-    std::cout << "VEH breakpoint seen:  " << (veh_dbg ? "YES" : "no") << "\n";
-    std::cout << "NtQueryInformationProcess hooked: " << (ntdll_hooked ? "YES" : "no") << "\n";
-    std::cout << "ProcessDebugPort != 0: " << (dbgport ? "YES" : "no") << "\n";
-    std::cout << "Hardware breakpoints: " << (hw_bp ? "YES" : "no") << "\n";
-
     anyDetected |= api_dbg | peb_dbg | !veh_dbg | ntdll_hooked | dbgport | hw_bp;
 
     // Software breakpoints
@@ -246,55 +280,30 @@ int main()
     {
         if (check_software_breakpoint(addr))
         {
-            std::cout << "Software breakpoint detected at address: " << addr << "\n";
+            // print raw pointer address in hex
+            wchar_t buf[64];
+            swprintf_s(buf, L"Software breakpoint detected at address: 0x%p", addr);
+            PrintWide(buf);
             anyDetected = true;
         }
     }
-
-    std::cout << "\nFinal result: " << (anyDetected ? "Debugger detected!" : "No debugger detected") << "\n";
 
     std::wstring secretA = L"1";
     std::wstring secretB = L"3";
     std::wstring secretC = L"3";
     std::wstring secretD = L"7";
 
-    std::wstring legitimateCopyA = L"L";
-    std::wstring legitimateCopyB = L"e";
-    std::wstring legitimateCopyC = L"g";
-    std::wstring legitimateCopyD = L"i";
-    std::wstring legitimateCopyE = L"t";
-    std::wstring legitimateCopyF = L"i";
-    std::wstring legitimateCopyG = L"m";
-    std::wstring legitimateCopyH = L"a";
-    std::wstring legitimateCopyI = L"t";
-    std::wstring legitimateCopyJ = L"e";
-    std::wstring legitimateCopyK = L" ";
-    std::wstring legitimateCopyL = L"C";
-    std::wstring legitimateCopyM = L"o";
-    std::wstring legitimateCopyN = L"p";
-    std::wstring legitimateCopyO = L"y";
-    std::wstring illlegitimateCopyA = L"I";
-    std::wstring illlegitimateCopyB = L"l";
-    std::wstring illlegitimateCopyC = L"l";
-    std::wstring illlegitimateCopyD = L"e";
-    std::wstring illlegitimateCopyE = L"g";
-    std::wstring illlegitimateCopyF = L"i";
-    std::wstring illlegitimateCopyG = L"t";
-    std::wstring illlegitimateCopyH = L"i";
-    std::wstring illlegitimateCopyI = L"m";
-    std::wstring illlegitimateCopyJ = L"a";
-    std::wstring illlegitimateCopyK = L"t";
-    std::wstring illlegitimateCopyL = L"e";
-    std::wstring illlegitimateCopyM = L" ";
-    std::wstring illlegitimateCopyN = L"C";
-    std::wstring illlegitimateCopyO = L"o";
-    std::wstring illlegitimateCopyP = L"p";
-    std::wstring illlegitimateCopyQ = L"y";
+    std::wstring legitimateParts[] = {
+       L"L",L"e",L"g",L"i",L"t",L"i",L"m",L"a",L"t",L"e",L" ",L"C",L"o",L"p",L"y"
+    };
+    std::wstring illegitimateParts[] = {
+        L"I",L"l",L"l",L"e",L"g",L"i",L"t",L"i",L"m",L"a",L"t",L"e",L" ",L"C",L"o",L"p",L"y"
+    };
 
     if (!anyDetected)
     {
         std::wstring inputSecret;
-        std::wcout << L"Enter your secret key: ";
+        PrintWide(L"Enter your secret key: ");
         std::getline(std::wcin, inputSecret);
 
         bool api_dbg = IsDebuggerPresent() != 0;
@@ -308,97 +317,59 @@ int main()
 
         if (anyDetected)
         {
-            if (!secretA.empty()) {
-                SecureZeroMemory(&secretA[0], secretA.size() * sizeof(wchar_t));
-                secretA.clear();
-                secretA.shrink_to_fit();
-            }
-            if (!secretB.empty()) {
-                SecureZeroMemory(&secretB[0], secretB.size() * sizeof(wchar_t));
-                secretB.clear();
-                secretB.shrink_to_fit();
-            }
-            if (!secretC.empty()) {
-                SecureZeroMemory(&secretC[0], secretC.size() * sizeof(wchar_t));
-                secretC.clear();
-                secretC.shrink_to_fit();
-            }
-            if (!secretD.empty()) {
-                SecureZeroMemory(&secretD[0], secretD.size() * sizeof(wchar_t));
-                secretD.clear();
-                secretD.shrink_to_fit();
-            }
+           // zero secrets before printing illegitimate message
+            std::vector<std::wstring*> toZero = { &secretA, &secretB, &secretC, &secretD };
+            zero_and_free_parts(toZero);
 
-            PrintWide(illlegitimateCopyA + illlegitimateCopyB + illlegitimateCopyC + illlegitimateCopyD + illlegitimateCopyE +
-                illlegitimateCopyF + illlegitimateCopyG + illlegitimateCopyH + illlegitimateCopyI + illlegitimateCopyJ + illlegitimateCopyK +
-                illlegitimateCopyL + illlegitimateCopyM + illlegitimateCopyN + illlegitimateCopyO + illlegitimateCopyP + illlegitimateCopyQ);
-
+            // zero legit/illegit message parts too (if you don't want them to remain in memory)
+            std::vector<std::wstring*> wordsToZero;
+            for (auto &s : illegitimateParts) wordsToZero.push_back(&const_cast<std::wstring&>(s));
+            PrintPartsNoConcat(wordsToZero);
+            zero_and_free_parts(wordsToZero);
             ExitProcess(1);
         }
 
         if (constant_time_equal_split(inputSecret, secretA, secretB, secretC, secretD))
         {
-            PrintWide(legitimateCopyA + legitimateCopyB + legitimateCopyC + legitimateCopyD + legitimateCopyE +
-                legitimateCopyF + legitimateCopyG + legitimateCopyH + legitimateCopyI + legitimateCopyJ + legitimateCopyK +
-                legitimateCopyL + legitimateCopyM + legitimateCopyN + legitimateCopyO);
+            std::vector<std::wstring*> toZero = { &secretA, &secretB, &secretC, &secretD };
+            zero_and_free_parts(toZero);
+
+            std::vector<std::wstring*> outParts;
+            for (auto& p : legitimateParts) outParts.push_back(&p);
+            PrintPartsNoConcat(outParts);
+            zero_and_free_parts(outParts);
         }
-        else {
-            PrintWide(illlegitimateCopyA + illlegitimateCopyB + illlegitimateCopyC + illlegitimateCopyD + illlegitimateCopyE +
-                illlegitimateCopyF + illlegitimateCopyG + illlegitimateCopyH + illlegitimateCopyI + illlegitimateCopyJ + illlegitimateCopyK +
-                illlegitimateCopyL + illlegitimateCopyM + illlegitimateCopyN + illlegitimateCopyO + illlegitimateCopyP + illlegitimateCopyQ);
+        else
+        {
+            std::vector<std::wstring*> toZero = { &secretA, &secretB, &secretC, &secretD };
+            zero_and_free_parts(toZero);
+
+            std::vector<std::wstring*> wordsToZero;
+            for (auto& s : illegitimateParts) wordsToZero.push_back(&const_cast<std::wstring&>(s));
+            PrintPartsNoConcat(wordsToZero);
+            zero_and_free_parts(wordsToZero);
         }
     }
-    else {
-        if (!secretA.empty()) {
-            SecureZeroMemory(&secretA[0], secretA.size() * sizeof(wchar_t));
-            secretA.clear();
-            secretA.shrink_to_fit();
-        }
-        if (!secretB.empty()) {
-            SecureZeroMemory(&secretB[0], secretB.size() * sizeof(wchar_t));
-            secretB.clear();
-            secretB.shrink_to_fit();
-        }
-        if (!secretC.empty()) {
-            SecureZeroMemory(&secretC[0], secretC.size() * sizeof(wchar_t));
-            secretC.clear();
-            secretC.shrink_to_fit();
-        }
-        if (!secretD.empty()) {
-            SecureZeroMemory(&secretD[0], secretD.size() * sizeof(wchar_t));
-            secretD.clear();
-            secretD.shrink_to_fit();
-        }
+    else
+    {
+        // already detected earlier: zero secrets and exit
+        std::vector<std::wstring*> toZero = { &secretA, &secretB, &secretC, &secretD };
+        zero_and_free_parts(toZero);
 
-        PrintWide(illlegitimateCopyA + illlegitimateCopyB + illlegitimateCopyC + illlegitimateCopyD + illlegitimateCopyE +
-            illlegitimateCopyF + illlegitimateCopyG + illlegitimateCopyH + illlegitimateCopyI + illlegitimateCopyJ + illlegitimateCopyK +
-            illlegitimateCopyL + illlegitimateCopyM + illlegitimateCopyN + illlegitimateCopyO + illlegitimateCopyP + illlegitimateCopyQ);
-
+        std::vector<std::wstring*> wordsToZero;
+        for (auto& s : illegitimateParts) wordsToZero.push_back(&const_cast<std::wstring&>(s));
+        PrintPartsNoConcat(wordsToZero);
+        zero_and_free_parts(wordsToZero);
         ExitProcess(1);
     }
 
-    if (!secretA.empty()) {
-        SecureZeroMemory(&secretA[0], secretA.size() * sizeof(wchar_t));
-        secretA.clear();
-        secretA.shrink_to_fit();
-    }
-    if (!secretB.empty()) {
-        SecureZeroMemory(&secretB[0], secretB.size() * sizeof(wchar_t));
-        secretB.clear();
-        secretB.shrink_to_fit();
-    }
-    if (!secretC.empty()) {
-        SecureZeroMemory(&secretC[0], secretC.size() * sizeof(wchar_t));
-        secretC.clear();
-        secretC.shrink_to_fit();
-    }
-    if (!secretD.empty()) {
-        SecureZeroMemory(&secretD[0], secretD.size() * sizeof(wchar_t));
-        secretD.clear();
-        secretD.shrink_to_fit();
-    }
+    std::vector<std::wstring*> toZero = { /* nothing left to zero here normally */ };
+    zero_and_free_parts(toZero);
 
-    std::cin.get();
+    // Wait for a key using wide I/O
+    PrintWide(L"Press Enter to exit...");
+    std::wstring dummy;
+    std::getline(std::wcin, dummy);
 
     return anyDetected ? 1 : 0;
 }
