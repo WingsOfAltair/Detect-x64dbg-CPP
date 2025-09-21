@@ -6,47 +6,47 @@ A C++ demo project that implements a multi-layer anti-debugging detection system
 
 Features
 
-Classic Debugger Checks
+1- Classic Debugger Checks
 
-  IsDebuggerPresent()
+  A- IsDebuggerPresent()
 
-  PEB BeingDebugged flag
+  B- PEB BeingDebugged flag
 
-  NtQueryInformationProcess hooks
+  C- NtQueryInformationProcess hooks
 
-  ProcessDebugPort
+  D- ProcessDebugPort
 
-  VEH (Vectored Exception Handler) breakpoint detection
+  E- VEH (Vectored Exception Handler) breakpoint detection
 
-Hardware Breakpoint Detection
+2- Hardware Breakpoint Detection
 
-  Enumerates all threads
+  A- Enumerates all threads
 
-  Reads debug registers (DR0–DR3) to detect breakpoints
+  B- Reads debug registers (DR0–DR3) to detect breakpoints
 
-  Skips threads that cannot be safely suspended
+  C- Skips threads that cannot be safely suspended
 
-  Works for per-thread hardware breakpoints set by debuggers like x64dbg
+  D- Works for per-thread hardware breakpoints set by debuggers like x64dbg
 
-Software Breakpoint Detection
+3- Software Breakpoint Detection
 
-  Checks selected critical addresses for INT3 (0xCC) instructions
+  A- Checks selected critical addresses for INT3 (0xCC) instructions
 
-  Can be expanded to scan more addresses or modules
+  B- Can be expanded to scan more addresses or modules
 
-Environment-Based Overrides
+4- Environment-Based Overrides
 
-  ANTI_DEBUG to disable anti-debugging for testing
+  A- ANTI_DEBUG to disable anti-debugging for testing
 
-  ANTI_DEBUG_FORCE to force checks even in debug builds
+  B- ANTI_DEBUG_FORCE to force checks even in debug builds
 
-Safe for Visual Studio Debugging
+5- Safe for Visual Studio Debugging
 
-  Avoids infinite loops by skipping threads that cannot be opened
+  A- Avoids infinite loops by skipping threads that cannot be opened
 
-  Does not suspend the current thread
+  B- Does not suspend the current thread
 
-  Properly checks return values when enumerating threads
+  C- Properly checks return values when enumerating threads
 
 Getting Started
 Requirements
