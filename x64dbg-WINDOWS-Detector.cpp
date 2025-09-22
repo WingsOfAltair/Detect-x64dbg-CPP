@@ -229,7 +229,24 @@ bool constant_time_equal_split(const std::wstring& input,
     for (wchar_t ch : d) diff |= input[pos++] ^ ch;
 
     return diff == 0;
-}  
+}
+
+bool lock_string(std::wstring& s)
+{
+    if (s.empty()) return false;
+    void* p = &s[0];
+    SIZE_T bytes = s.size() * sizeof(wchar_t);
+    if (VirtualLock(p, bytes)) return true;
+    return false;
+}
+
+void unlock_string(std::wstring& s)
+{
+    if (s.empty()) return;
+    void* p = &s[0];
+    SIZE_T bytes = s.size() * sizeof(wchar_t);
+    VirtualUnlock(p, bytes);
+}
 
 // securely zero an array of wide-strings (helper)
 void zero_and_free_parts(std::vector<std::wstring*>& parts)
@@ -238,9 +255,11 @@ void zero_and_free_parts(std::vector<std::wstring*>& parts)
         if (!p) continue;
         std::wstring& s = *p;
         if (!s.empty()) {
+            lock_string(s);
             SecureZeroMemory(&s[0], s.size() * sizeof(wchar_t));
             s.clear();
             s.shrink_to_fit();
+            unlock_string(s);
         }
     }
 }  
@@ -299,6 +318,47 @@ int wmain()
         L"E",L"n",L"t",L"e",L"r",L" ",L"y",L"o",L"u",L"r",L" ",L"s",L"e",L"c",L"r",L"e",L"t", L" ", L"k", L"e", L"y", L":", L" "
     };
 
+    if (lock_string(secretA) == false) {
+        std::vector<std::wstring*> toZero = { &secretA, &secretB, &secretC, &secretD };
+        zero_and_free_parts(toZero);
+
+        std::vector<std::wstring*> wordsToZero;
+        for (auto& s : illegitimateParts) wordsToZero.push_back(&const_cast<std::wstring&>(s));
+        PrintPartsNoConcat(wordsToZero);
+        zero_and_free_parts(wordsToZero);
+        ExitProcess(1);
+    }
+    if (lock_string(secretB) == false) {
+        std::vector<std::wstring*> toZero = { &secretA, &secretB, &secretC, &secretD };
+        zero_and_free_parts(toZero);
+
+        std::vector<std::wstring*> wordsToZero;
+        for (auto& s : illegitimateParts) wordsToZero.push_back(&const_cast<std::wstring&>(s));
+        PrintPartsNoConcat(wordsToZero);
+        zero_and_free_parts(wordsToZero);
+        ExitProcess(1);
+    }
+    if (lock_string(secretC) == false) {
+        std::vector<std::wstring*> toZero = { &secretA, &secretB, &secretC, &secretD };
+        zero_and_free_parts(toZero);
+
+        std::vector<std::wstring*> wordsToZero;
+        for (auto& s : illegitimateParts) wordsToZero.push_back(&const_cast<std::wstring&>(s));
+        PrintPartsNoConcat(wordsToZero);
+        zero_and_free_parts(wordsToZero);
+        ExitProcess(1);
+    }
+    if (lock_string(secretD) == false) {
+        std::vector<std::wstring*> toZero = { &secretA, &secretB, &secretC, &secretD };
+        zero_and_free_parts(toZero);
+
+        std::vector<std::wstring*> wordsToZero;
+        for (auto& s : illegitimateParts) wordsToZero.push_back(&const_cast<std::wstring&>(s));
+        PrintPartsNoConcat(wordsToZero);
+        zero_and_free_parts(wordsToZero);
+        ExitProcess(1);
+    }
+
     if (!anyDetected)
     {
         std::wstring inputSecret;
@@ -319,11 +379,9 @@ int wmain()
 
         if (anyDetected)
         {
-           // zero secrets before printing illegitimate message
             std::vector<std::wstring*> toZero = { &secretA, &secretB, &secretC, &secretD };
             zero_and_free_parts(toZero);
 
-            // zero legit/illegit message parts too (if you don't want them to remain in memory)
             std::vector<std::wstring*> wordsToZero;
             for (auto &s : illegitimateParts) wordsToZero.push_back(&const_cast<std::wstring&>(s));
             PrintPartsNoConcat(wordsToZero);
@@ -354,7 +412,6 @@ int wmain()
     }
     else
     {
-        // already detected earlier: zero secrets and exit
         std::vector<std::wstring*> toZero = { &secretA, &secretB, &secretC, &secretD };
         zero_and_free_parts(toZero);
 
@@ -365,7 +422,7 @@ int wmain()
         ExitProcess(1);
     }
 
-    std::vector<std::wstring*> toZero = { /* nothing left to zero here normally */ };
+    std::vector<std::wstring*> toZero = { };
     zero_and_free_parts(toZero);
 
     // Wait for a key using wide I/O
