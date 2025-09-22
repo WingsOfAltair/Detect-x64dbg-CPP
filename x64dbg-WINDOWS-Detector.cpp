@@ -8,9 +8,10 @@
 #include <chrono>
 #include <cstdlib>        
 #include <io.h>      // _setmode
-#include <fcntl.h>   // _O_U16TEXT 
+#include <fcntl.h>   // _O_U16TEXT
 
-std::string b23(const char* name)
+// --------------------------- Environment helpers ---------------------------
+std::string safe_getenv(const char* name)
 {
     char* buf = nullptr;
     size_t len = 0;
@@ -22,23 +23,28 @@ std::string b23(const char* name)
     return {};
 }   
 
-void b22(const std::wstring& s)
+// Helper to safely print a wide (UTF-16) string to Windows console.
+void PrintWide(const std::wstring& s)
 {
     HANDLE hOut = GetStdHandle(STD_OUTPUT_HANDLE);
     if (hOut == INVALID_HANDLE_VALUE || hOut == nullptr) {
+        // fallback to narrow output
         std::wcout << s << std::endl;
         return;
     }
     DWORD written = 0;
     WriteConsoleW(hOut, s.c_str(), static_cast<DWORD>(s.size()), &written, nullptr);
+    // write a newline
     const wchar_t nl = L'\n';
     WriteConsoleW(hOut, &nl, 1, &written, nullptr);
 }
 
-void b21(const std::wstring& s)
+// Helper to safely print a wide (UTF-16) string to Windows console.
+void PrintWideNoNewLine(const std::wstring& s)
 {
     HANDLE hOut = GetStdHandle(STD_OUTPUT_HANDLE);
     if (hOut == INVALID_HANDLE_VALUE || hOut == nullptr) {
+        // fallback to narrow output
         std::wcout << s << std::endl;
         return;
     }
@@ -46,53 +52,55 @@ void b21(const std::wstring& s)
     WriteConsoleW(hOut, s.c_str(), static_cast<DWORD>(s.size()), &written, nullptr);
 }
 
-bool b20()
+bool anti_debug_env_enabled()
 {
-    std::string v = b23("ANTI_DEBUG");
-    if (v.empty()) return true;
+    std::string v = safe_getenv("ANTI_DEBUG");
+    if (v.empty()) return true; // default: enabled
     if (v == "0" || _stricmp(v.c_str(), "false") == 0 || _stricmp(v.c_str(), "no") == 0)
         return false;
     return true;
 }
 
-bool b19()
+bool anti_debug_force_enabled()
 {
-    std::string v = b23("ANTI_DEBUG_FORCE");
+    std::string v = safe_getenv("ANTI_DEBUG_FORCE");
     if (v.empty()) return false;
     if (v == "1" || _stricmp(v.c_str(), "true") == 0) return true;
     return false;
 }
 
-volatile LONG b18 = 0;
-PVOID b17 = nullptr;
+// --------------------------- VEH breakpoint ---------------------------
+volatile LONG g_veh_seen_bp = 0;
+PVOID g_veh_handle = nullptr;
 
-LONG CALLBACK b16(PEXCEPTION_POINTERS ExceptionInfo)
+LONG CALLBACK MyVeh(PEXCEPTION_POINTERS ExceptionInfo)
 {
     if (ExceptionInfo && ExceptionInfo->ExceptionRecord &&
         ExceptionInfo->ExceptionRecord->ExceptionCode == EXCEPTION_BREAKPOINT)
     {
-        InterlockedExchange(&b18, 1);
+        InterlockedExchange(&g_veh_seen_bp, 1);
         return EXCEPTION_CONTINUE_SEARCH;
     }
     return EXCEPTION_CONTINUE_SEARCH;
 }
 
-bool b15()
+bool veh_breakpoint_test()
 {
-    b17 = AddVectoredExceptionHandler(1, b16);
-    if (!b17) return false;
-    InterlockedExchange(&b18, 0);
+    g_veh_handle = AddVectoredExceptionHandler(1, MyVeh);
+    if (!g_veh_handle) return false;
+    InterlockedExchange(&g_veh_seen_bp, 0);
 
     __try { __debugbreak(); }
     __except (EXCEPTION_EXECUTE_HANDLER) {}
 
-    bool saw = (InterlockedCompareExchange(&b18, 0, 0) != 0);
-    RemoveVectoredExceptionHandler(b17);
-    b17 = nullptr;
+    bool saw = (InterlockedCompareExchange(&g_veh_seen_bp, 0, 0) != 0);
+    RemoveVectoredExceptionHandler(g_veh_handle);
+    g_veh_handle = nullptr;
     return saw;
 }
 
-bool b14()
+// --------------------------- PEB check ---------------------------
+bool check_peb_being_debugged()
 {
 #ifdef _M_X64
     PBYTE pPEB = (PBYTE)__readgsqword(0x60);
@@ -103,10 +111,11 @@ bool b14()
     return (*(pPEB + 2) != 0);
 }
 
+// --------------------------- NtQueryInformationProcess / ProcessDebugPort ---------------------------
 typedef NTSTATUS(NTAPI* NtQueryInformationProcess_t)(
     HANDLE, PROCESSINFOCLASS, PVOID, ULONG, PULONG);
 
-bool b13(LPCSTR funcName)
+bool ntdll_function_looks_orig(LPCSTR funcName)
 {
     HMODULE hNt = GetModuleHandleW(L"ntdll.dll");
     if (!hNt) return false;
@@ -127,9 +136,9 @@ bool b13(LPCSTR funcName)
 #endif
 }
 
-bool b12() { return !b13("NtQueryInformationProcess"); }
+bool check_nt_query_information_process_hooked() { return !ntdll_function_looks_orig("NtQueryInformationProcess"); }
 
-bool b11()
+bool check_process_debug_port_via_nt()
 {
     HMODULE hNt = GetModuleHandleW(L"ntdll.dll");
     if (!hNt) return false;
@@ -141,7 +150,8 @@ bool b11()
     return (st == 0 && debugPort != 0);
 }
 
-bool b10()
+// --------------------------- Hardware breakpoints ---------------------------
+bool any_thread_has_hw_breakpoints()
 {
     HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
     if (snap == INVALID_HANDLE_VALUE) return false;
@@ -158,7 +168,7 @@ bool b10()
 
     do {
         if (te.th32OwnerProcessID != myPid) continue;
-        if (te.th32ThreadID == GetCurrentThreadId()) continue;
+        if (te.th32ThreadID == GetCurrentThreadId()) continue; // skip current thread
 
         HANDLE hThread = OpenThread(THREAD_GET_CONTEXT | THREAD_SUSPEND_RESUME, FALSE, te.th32ThreadID);
         if (!hThread) continue;
@@ -185,7 +195,8 @@ bool b10()
     return detected;
 }
 
-bool b9(void* address)
+// --------------------------- Software breakpoint detection ---------------------------
+bool check_software_breakpoint(void* address)
 {
     unsigned char byte = 0;
     SIZE_T read = 0;
@@ -194,12 +205,13 @@ bool b9(void* address)
     return false;
 }
 
-void* b8[] = {
+// Example critical addresses (expand as needed)
+void* critical_addresses[] = {
     reinterpret_cast<void*>(&IsDebuggerPresent),
-    reinterpret_cast<void*>(&b15)
+    reinterpret_cast<void*>(&veh_breakpoint_test)
 };
 
-bool b7(const std::wstring& input,
+bool constant_time_equal_split(const std::wstring& input,
     const std::wstring& a,
     const std::wstring& b,
     const std::wstring& c,
@@ -219,13 +231,13 @@ bool b7(const std::wstring& input,
     return diff == 0;
 }
 
-bool b6(std::wstring& s)
+bool lock_string(std::wstring& s)
 {
     if (s.empty()) return false;
     return VirtualLock(&s[0], s.size() * sizeof(wchar_t)) != 0;
 }
 
-void b5(std::wstring& s)
+void unlock_and_zero_string(std::wstring& s)
 {
     if (s.empty()) return;
     SecureZeroMemory(&s[0], s.size() * sizeof(wchar_t));
@@ -234,13 +246,13 @@ void b5(std::wstring& s)
     s.shrink_to_fit();
 }
 
-class b1 {
+class ObfuscatedSecret {
 private:
     std::vector<wchar_t> encoded_;
     wchar_t xorKey_;
 
 public:
-    b1(const std::wstring& secret, wchar_t key = 0xAA)
+    ObfuscatedSecret(const std::wstring& secret, wchar_t key = 0xAA)
         : xorKey_(key)
     {
         encoded_.reserve(secret.size());
@@ -250,9 +262,9 @@ public:
             VirtualLock(encoded_.data(), encoded_.size() * sizeof(wchar_t));
     }
 
-    ~b1() { b3(); }
+    ~ObfuscatedSecret() { secure_zero(); }
 
-    bool b2(const std::wstring& input) const
+    bool check(const std::wstring& input) const
     {
         if (input.size() != encoded_.size()) return false;
         volatile unsigned diff = 0;
@@ -261,7 +273,7 @@ public:
         return diff == 0;
     }
 
-    void b3()
+    void secure_zero()
     {
         if (!encoded_.empty()) {
             SecureZeroMemory(encoded_.data(), encoded_.size() * sizeof(wchar_t));
@@ -271,7 +283,7 @@ public:
     }
 };
 
-std::wstring b4(const wchar_t* obf, size_t len, wchar_t key)
+std::wstring decode_string(const wchar_t* obf, size_t len, wchar_t key)
 {
     std::wstring out;
     out.reserve(len);
@@ -280,117 +292,117 @@ std::wstring b4(const wchar_t* obf, size_t len, wchar_t key)
     return out;
 }
 
-int a1()
-{
+// --------------------------- Main detector ---------------------------
+int wmain()
+{                   // enable UTF-16 I/O on Windows console for wcin/wcout/WriteConsoleW
     _setmode(_fileno(stdin), _O_U16TEXT);
     _setmode(_fileno(stdout), _O_U16TEXT);
 
-    b22(L"X64dbg Multi-layer debugger detection demo (with HW/SW breakpoints)\n");
+    PrintWide(L"X64dbg Multi-layer debugger detection demo (with HW/SW breakpoints)\n");
 
-    bool b24 = false;
+    bool debuggerDetected = false;
 
-    b24 |= (IsDebuggerPresent() != 0);
-    b24 |= b14();
-    b24 |= !b15();
-    b24 |= b12();
-    b24 |= b11();
-    b24 |= b10();
+    debuggerDetected |= (IsDebuggerPresent() != 0);
+    debuggerDetected |= check_peb_being_debugged();
+    debuggerDetected |= !veh_breakpoint_test();
+    debuggerDetected |= check_nt_query_information_process_hooked();
+    debuggerDetected |= check_process_debug_port_via_nt();
+    debuggerDetected |= any_thread_has_hw_breakpoints();
 
-    for (void* b25 : b8)
+    for (void* addr : critical_addresses)
     {
-        if (b9(b25))
+        if (check_software_breakpoint(addr))
         {
-            b24 = true;
+            debuggerDetected = true;
         }
     }
 
-    constexpr wchar_t b26 = 0xAA;
+    constexpr wchar_t key = 0xAA;
 
-    wchar_t b27[] = { 0x31 ^ b26, 0x33 ^ b26, 0x33 ^ b26, 0x37 ^ b26 };
-    wchar_t b28[] = {
-        L'L' ^ b26,L'e' ^ b26,L'g' ^ b26,L'i' ^ b26,L't' ^ b26,L'i' ^ b26,L'm' ^ b26,L'a' ^ b26,L't' ^ b26,L'e' ^ b26,
-        L' ' ^ b26,L'C' ^ b26,L'o' ^ b26,L'p' ^ b26,L'y' ^ b26
+    wchar_t secret_obf[] = { 0x31 ^ key, 0x33 ^ key, 0x33 ^ key, 0x37 ^ key };
+    wchar_t legit_obf[] = {
+        L'L' ^ key,L'e' ^ key,L'g' ^ key,L'i' ^ key,L't' ^ key,L'i' ^ key,L'm' ^ key,L'a' ^ key,L't' ^ key,L'e' ^ key,
+        L' ' ^ key,L'C' ^ key,L'o' ^ key,L'p' ^ key,L'y' ^ key
     };
-    wchar_t b29[] = {
-        L'I' ^ b26,L'l' ^ b26,L'l' ^ b26,L'e' ^ b26,L'g' ^ b26,L'i' ^ b26,L't' ^ b26,L'i' ^ b26,L'm' ^ b26,L'a' ^ b26,L't' ^ b26,L'e' ^ b26,
-        L' ' ^ b26,L'C' ^ b26,L'o' ^ b26,L'p' ^ b26,L'y' ^ b26
+    wchar_t illegit_obf[] = {
+        L'I' ^ key,L'l' ^ key,L'l' ^ key,L'e' ^ key,L'g' ^ key,L'i' ^ key,L't' ^ key,L'i' ^ key,L'm' ^ key,L'a' ^ key,L't' ^ key,L'e' ^ key,
+        L' ' ^ key,L'C' ^ key,L'o' ^ key,L'p' ^ key,L'y' ^ key
     };
-    wchar_t b30[] = {
-        L'E' ^ b26,L'n' ^ b26,L't' ^ b26,L'e' ^ b26,L'r' ^ b26,L' ' ^ b26,L'y' ^ b26,L'o' ^ b26,L'u' ^ b26,L'r' ^ b26,
-        L' ' ^ b26,L's' ^ b26,L'e' ^ b26,L'c' ^ b26,L'r' ^ b26,L'e' ^ b26,L't' ^ b26,L' ' ^ b26,L'k' ^ b26,L'e' ^ b26,L'y' ^ b26,L':' ^ b26,L' ' ^ b26
+    wchar_t prompt_obf[] = {
+        L'E' ^ key,L'n' ^ key,L't' ^ key,L'e' ^ key,L'r' ^ key,L' ' ^ key,L'y' ^ key,L'o' ^ key,L'u' ^ key,L'r' ^ key,
+        L' ' ^ key,L's' ^ key,L'e' ^ key,L'c' ^ key,L'r' ^ key,L'e' ^ key,L't' ^ key,L' ' ^ key,L'k' ^ key,L'e' ^ key,L'y' ^ key,L':' ^ key,L' ' ^ key
     };
 
-    std::wstring b31 = b4(b27, 4, b26);
-    std::wstring b32 = b4(b28, 15, b26);
-    std::wstring b33 = b4(b29, 17, b26);
-    std::wstring b34 = b4(b30, 23, b26);
+    std::wstring secret = decode_string(secret_obf, 4, key);
+    std::wstring legitMsg = decode_string(legit_obf, 15, key);
+    std::wstring illegitMsg = decode_string(illegit_obf, 17, key);
+    std::wstring promptMsg = decode_string(prompt_obf, 23, key);
 
-    if (!b6(b31))
+    if (!lock_string(secret))
     {
-        b5(b31);
-        b5(b32);
-        b5(b33);
-        b5(b34);
+        unlock_and_zero_string(secret);
+        unlock_and_zero_string(legitMsg);
+        unlock_and_zero_string(illegitMsg);
+        unlock_and_zero_string(promptMsg);
+        PrintWide(L"Failed to lock memory, exiting.\n");
         ExitProcess(1);
     }
 
-    if (b24)
+    if (debuggerDetected)
     {
-        b5(b31);
-        b5(b32);
-        b22(b33);
-        b5(b33);
-        b5(b34);
-
-        ExitProcess(1);
-    }
-
-    b22(b34);
-
-    std::wstring b35;
-    std::getline(std::wcin, b35);
-
-    b24 |= (IsDebuggerPresent() != 0);
-    b24 |= b14();
-    b24 |= !b15();
-    b24 |= b12();
-    b24 |= b11();
-    b24 |= b10();
-
-    if (b24)
-    {
-        b5(b31);
-        b5(b32);
-        b22(b33);
-        b5(b33);
-        b5(b34);
+        unlock_and_zero_string(secret);
+        unlock_and_zero_string(legitMsg);
+        PrintWide(illegitMsg);
+        unlock_and_zero_string(illegitMsg);
+        unlock_and_zero_string(promptMsg);
 
         ExitProcess(1);
     }
 
-    if (b7(b35, b31.substr(0, 1), b31.substr(1, 1),
-        b31.substr(2, 1), b31.substr(3, 1)))
+    PrintWide(promptMsg);
+
+    std::wstring inputSecret;
+    std::getline(std::wcin, inputSecret);
+
+    // Recheck for debugger after input
+    debuggerDetected |= (IsDebuggerPresent() != 0);
+    debuggerDetected |= check_peb_being_debugged();
+    debuggerDetected |= !veh_breakpoint_test();
+    debuggerDetected |= check_nt_query_information_process_hooked();
+    debuggerDetected |= check_process_debug_port_via_nt();
+    debuggerDetected |= any_thread_has_hw_breakpoints();       
+
+    if (debuggerDetected)
     {
-        b5(b31);
-        b22(b32);
+        unlock_and_zero_string(secret);
+        unlock_and_zero_string(legitMsg);
+        PrintWide(illegitMsg);
+        unlock_and_zero_string(illegitMsg);
+        unlock_and_zero_string(promptMsg);
+
+        ExitProcess(1);
+    }
+
+    if (constant_time_equal_split(inputSecret, secret.substr(0, 1), secret.substr(1, 1),
+        secret.substr(2, 1), secret.substr(3, 1)))
+    {
+        unlock_and_zero_string(secret);
+        PrintWide(legitMsg);
     }
     else
     {
-        b5(b31);
-        b22(b33);
+        unlock_and_zero_string(secret);
+        PrintWide(illegitMsg);
     }
 
-    b5(b32);
-    b5(b33);
-    b5(b34);
+    // Zero messages before exit
+    unlock_and_zero_string(legitMsg);
+    unlock_and_zero_string(illegitMsg);
+    unlock_and_zero_string(promptMsg);
 
-    b22(L"Press Enter to exit...");
+    PrintWide(L"Press Enter to exit...");
     std::wstring dummy;
     std::getline(std::wcin, dummy);
 
-    return b24 ? 1 : 0;
-}
-
-int wmain() {
-    return a1();
+    return debuggerDetected ? 1 : 0;
 }
