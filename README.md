@@ -84,7 +84,7 @@ Software breakpoint detected at address: 0x7FF6F1234567
 Final result: Debugger detected!
 ```
 
-### To ensure static analysis tools such as IDA Pro have a hard time reading through the code, make sure to do the following (already done in obfuscated 'branch':
+### To ensure static analysis tools such as IDA Pro have a hard time reading through the code, make sure to do the following (already done in obfuscated 'branch'):
 
 ## 1. Compile Without Debug Symbols
 
