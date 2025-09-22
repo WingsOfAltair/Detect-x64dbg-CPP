@@ -90,15 +90,18 @@ Final result: Debugger detected!
 
 In MSVC:
 
+```
 Set Configuration to Release.
 
 Set Debug Information Format to None (/DEBUG:NONE) in C/C++ → General.
-
+```
 
 In CMake:
 
+```
 set(CMAKE_BUILD_TYPE Release)
 set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} /Zi- /DEBUG:NONE")
+```
 
 This removes .pdb files and local variable names from the binary.
 
@@ -112,9 +115,11 @@ Outcome: IDA will see only compiler-generated names like sub_401000 instead of w
 
 Use the linker to not export any functions:
 
+```
 In MSVC: Properties → Linker → Advanced → Export All Symbols → No.
 
 Or use __declspec(dllexport) only when necessary.
+```
 
 
 Use strip.exe (for MinGW) or editbin.exe /strip (MSVC) to remove symbol tables from the executable.
@@ -134,10 +139,11 @@ For classes or helpers, make them struct a { ... };.
 
 Example:
 
+```
 void PrintPartsNoConcat(std::vector<std::wstring*>& parts) { ... }
 // becomes
 void f1(std::vector<std::wstring*>& a) { ... }
-
+```
 
 
 ---
@@ -146,8 +152,9 @@ void f1(std::vector<std::wstring*>& a) { ... }
 
 Make helper functions static or inline so they do not appear in the export table.
 
+```
 static void f1(std::vector<std::wstring*>& a) { ... }
-
+```
 
 
 ---
@@ -156,6 +163,7 @@ static void f1(std::vector<std::wstring*>& a) { ... }
 
 IDA shows names in pseudocode using debug info + RTTI. You can:
 
+```
 Disable RTTI if not needed (/GR- in MSVC).
 
 Avoid C++ exceptions or virtual functions that leave RTTI info.
@@ -163,7 +171,7 @@ Avoid C++ exceptions or virtual functions that leave RTTI info.
 Use anonymous namespaces for C++:
 
 namespace { void f1() { ... } }
-
+```
 
 
 
