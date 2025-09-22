@@ -1,6 +1,0 @@
-﻿  x64dbg-WINDOWS-Detector.cpp
-  Generating code
-  Previous IPDB not found, fall back to full compilation.
-  All 144 functions were compiled because no usable IPDB/IOBJ from previous compilation was found.
-  Finished generating code
-  Detect-X64dbg-CPP.vcxproj -> D:\GitHub\Detect-x64dbg-CPP\x64\Release\Detect-X64-dbg-CPP.exe
