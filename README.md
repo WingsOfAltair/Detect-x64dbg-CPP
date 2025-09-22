@@ -83,3 +83,122 @@ Software breakpoint detected at address: 0x7FF6F1234567
 
 Final result: Debugger detected!
 ```
+
+### To ensure static analysis tools such as IDA Pro have a hard time reading through the code, make sure to do the following:
+
+## 1. Compile Without Debug Symbols
+
+In MSVC:
+
+```
+Set Configuration to Release.
+
+Set Debug Information Format to None (/DEBUG:NONE) in C/C++ → General.
+```
+
+In CMake:
+
+```
+set(CMAKE_BUILD_TYPE Release)
+set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} /Zi- /DEBUG:NONE")
+```
+
+This removes .pdb files and local variable names from the binary.
+
+Outcome: IDA will see only compiler-generated names like sub_401000 instead of wmain.
+
+
+
+---
+
+## 2. Strip Symbols / Minimize Exports
+
+Use the linker to not export any functions:
+
+```
+In MSVC: Properties → Linker → Advanced → Export All Symbols → No.
+
+Or use __declspec(dllexport) only when necessary.
+```
+
+
+Use strip.exe (for MinGW) or editbin.exe /strip (MSVC) to remove symbol tables from the executable.
+
+
+
+---
+
+## 3. Obfuscate Function and Variable Names
+
+For internal functions:
+
+Rename them to meaningless names, e.g., f1, f2, g123.
+
+For classes or helpers, make them struct a { ... };.
+
+
+Example:
+
+```
+void PrintPartsNoConcat(std::vector<std::wstring*>& parts) { ... }
+// becomes
+void f1(std::vector<std::wstring*>& a) { ... }
+```
+
+
+---
+
+## 4. Use Inline and Static
+
+Make helper functions static or inline so they do not appear in the export table.
+
+```
+static void f1(std::vector<std::wstring*>& a) { ... }
+```
+
+
+---
+
+## 5. Obfuscate the Call Stack
+
+IDA shows names in pseudocode using debug info + RTTI. You can:
+
+```
+Disable RTTI if not needed (/GR- in MSVC).
+
+Avoid C++ exceptions or virtual functions that leave RTTI info.
+
+Use anonymous namespaces for C++:
+
+namespace { void f1() { ... } }
+```
+
+
+
+---
+
+## 6. Optional: Use a Binary Obfuscator
+
+Tools like Themida, VMProtect, Obsidium can rename functions, scramble control flow, and encrypt strings.
+
+Even without debug symbols, these tools make IDA’s pseudocode almost unreadable.
+
+
+
+---
+
+## Recommended Combination
+
+1. Release build without debug info.
+
+
+2. Static / inline / anonymous namespaces for helpers.
+
+
+3. Rename all functions/variables to meaningless short names.
+
+
+4. Keep string obfuscation (XOR at runtime) as we already discussed.
+
+
+5. Optionally, pack or obfuscate the binary to prevent static analysis.
