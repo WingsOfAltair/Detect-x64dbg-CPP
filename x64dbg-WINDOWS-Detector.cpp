@@ -205,7 +205,7 @@ std::string base64_encode(const std::string& in) {
 }
 
 // --------------------------- Main ----------------
-int main()
+int wmain()
 {
     // Lock console for UTF-8 input/output
     SetConsoleOutputCP(CP_UTF8);
