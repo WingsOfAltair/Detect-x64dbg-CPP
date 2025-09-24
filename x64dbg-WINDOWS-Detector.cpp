@@ -1,209 +1,43 @@
 #include <windows.h>
 #include <tlhelp32.h>
-#include <winternl.h>
+#include <wincrypt.h>
 #include <iostream>
-#include <vector>
 #include <string>
-#include <algorithm>
-#include <chrono>
-#include <cstdlib>
-#include <io.h>
-#include <fcntl.h>
-#include <cassert>
+#include <vector>
+#include <winternl.h>
+#include <Windows.h>
+#include <Wincrypt.h>
 
-static const char a1[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+volatile LONG a1 = 0;
+PVOID a2 = nullptr;
 
-std::string a2(const unsigned char* data, size_t len) {
-    std::string out;
-    out.reserve(((len + 2) / 3) * 4);
-
-    size_t i = 0;
-    for (; i + 2 < len; i += 3) {
-        unsigned int n = (data[i] << 16) | (data[i + 1] << 8) | data[i + 2];
-        out.push_back(a1[(n >> 18) & 0x3F]);
-        out.push_back(a1[(n >> 12) & 0x3F]);
-        out.push_back(a1[(n >> 6) & 0x3F]);
-        out.push_back(a1[n & 0x3F]);
-    }
-    if (i < len) {
-        unsigned int n = data[i] << 16;
-        out.push_back(a1[(n >> 18) & 0x3F]);
-        if (i + 1 < len) {
-            n |= (data[i + 1] << 8);
-            out.push_back(a1[(n >> 12) & 0x3F]);
-            out.push_back(a1[(n >> 6) & 0x3F]);
-            out.push_back('=');
-        }
-        else {
-            out.push_back(a1[(n >> 12) & 0x3F]);
-            out.push_back('=');
-            out.push_back('=');
-        }
-    }
-    return out;
-}
-
-std::vector<unsigned char> a3(const std::string& s) {
-    int len = (int)s.size();
-    if (len % 4 != 0) return {};
-    auto dec = std::vector<int>(256, -1);
-    for (int i = 0; i < 64; ++i) dec[(unsigned char)a1[i]] = i;
-    dec['='] = 0;
-
-    std::vector<unsigned char> out;
-    out.reserve((len / 4) * 3);
-    for (int i = 0; i < len; i += 4) {
-        int a = dec[(unsigned char)s[i]];
-        int b = dec[(unsigned char)s[i + 1]];
-        int c = dec[(unsigned char)s[i + 2]];
-        int d = dec[(unsigned char)s[i + 3]];
-        if (a < 0 || b < 0 || c < 0 || d < 0) return {};
-        unsigned int n = (a << 18) | (b << 12) | (c << 6) | d;
-        out.push_back((n >> 16) & 0xFF);
-        if (s[i + 2] != '=') out.push_back((n >> 8) & 0xFF);
-        if (s[i + 3] != '=') out.push_back(n & 0xFF);
-    }
-    return out;
-}
-
-static std::string a4(const std::wstring& ws) {
-    if (ws.empty()) return {};
-    int needed = WideCharToMultiByte(CP_UTF8, 0, ws.data(), (int)ws.size(), nullptr, 0, nullptr, nullptr);
-    if (needed <= 0) return {};
-    std::string out;
-    out.resize(needed);
-    WideCharToMultiByte(CP_UTF8, 0, ws.data(), (int)ws.size(), &out[0], needed, nullptr, nullptr);
-    return out;
-}
-
-static std::wstring a5(const std::string& s) {
-    if (s.empty()) return {};
-    int needed = MultiByteToWideChar(CP_UTF8, 0, s.data(), (int)s.size(), nullptr, 0);
-    if (needed <= 0) return {};
-    std::wstring out;
-    out.resize(needed);
-    MultiByteToWideChar(CP_UTF8, 0, s.data(), (int)s.size(), &out[0], needed);
-    return out;
-}
-
-static void a6(std::string& s) {
-    if (!s.empty()) {
-        SecureZeroMemory(&s[0], s.size());
-        s.clear();
-        s.shrink_to_fit();
-    }
-}
-static void a7(std::vector<unsigned char>& v) {
-    if (!v.empty()) {
-        SecureZeroMemory(v.data(), v.size());
-        v.clear();
-        v.shrink_to_fit();
-    }
-}
-
-class a8 {
-public:
-    a8(const unsigned char* obf_bytes, size_t len, unsigned char xor_key)
-        : xor_key_(xor_key), len_(len)
-    {
-        if (len_ == 0) return;
-        base64_text_.resize(len_);
-        for (size_t i = 0; i < len_; ++i) base64_text_[i] = static_cast<char>(obf_bytes[i] ^ xor_key_);
-        if (!base64_text_.empty()) {
-            VirtualLock(&base64_text_[0], base64_text_.size());
-        }
-    }
-
-    ~a8() {
-        a9();
-    }
-
-    const std::string& a10() const { return base64_text_; }
-
-    std::vector<unsigned char> a11() const {
-        return a3(base64_text_);
-    }
-
-    std::wstring a12() const {
-        std::vector<unsigned char> bytes = a11();
-        if (bytes.empty()) return {};
-        std::string utf8((char*)bytes.data(), bytes.size());
-        std::wstring ret = a5(utf8);
-        a6(utf8);
-        a7(bytes);
-        return ret;
-    }
-
-    void a9() {
-        if (!base64_text_.empty()) {
-            SecureZeroMemory(&base64_text_[0], base64_text_.size());
-            VirtualUnlock(&base64_text_[0], base64_text_.size());
-            base64_text_.clear();
-            base64_text_.shrink_to_fit();
-        }
-    }
-
-private:
-    unsigned char xor_key_;
-    size_t len_;
-    std::string base64_text_;
-};
-
-std::string a13(const char* name)
-{
-    char* buf = nullptr;
-    size_t len = 0;
-    if (_dupenv_s(&buf, &len, name) == 0 && buf != nullptr) {
-        std::string val(buf);
-        free(buf);
-        return val;
-    }
-    return {};
-}
-
-void a14(const std::wstring& s)
-{
-    HANDLE hOut = GetStdHandle(STD_OUTPUT_HANDLE);
-    if (hOut == INVALID_HANDLE_VALUE || hOut == nullptr) {
-        std::wcout << s << std::endl;
-        return;
-    }
-    DWORD written = 0;
-    WriteConsoleW(hOut, s.c_str(), static_cast<DWORD>(s.size()), &written, nullptr);
-    const wchar_t nl = L'\n';
-    WriteConsoleW(hOut, &nl, 1, &written, nullptr);
-}
-
-volatile LONG a16 = 0;
-PVOID a17 = nullptr;
-
-LONG CALLBACK a18(PEXCEPTION_POINTERS ExceptionInfo)
+LONG CALLBACK a3(PEXCEPTION_POINTERS ExceptionInfo)
 {
     if (ExceptionInfo && ExceptionInfo->ExceptionRecord &&
         ExceptionInfo->ExceptionRecord->ExceptionCode == EXCEPTION_BREAKPOINT)
     {
-        InterlockedExchange(&a16, 1);
+        InterlockedExchange(&a1, 1);
         return EXCEPTION_CONTINUE_SEARCH;
     }
     return EXCEPTION_CONTINUE_SEARCH;
 }
 
-bool a19()
+bool a4()
 {
-    a17 = AddVectoredExceptionHandler(1, a18);
-    if (!a17) return false;
-    InterlockedExchange(&a16, 0);
+    a2 = AddVectoredExceptionHandler(1, a3);
+    if (!a2) return false;
+    InterlockedExchange(&a1, 0);
 
     __try { __debugbreak(); }
     __except (EXCEPTION_EXECUTE_HANDLER) {}
 
-    bool saw = (InterlockedCompareExchange(&a16, 0, 0) != 0);
-    RemoveVectoredExceptionHandler(a17);
-    a17 = nullptr;
+    bool saw = (InterlockedCompareExchange(&a1, 0, 0) != 0);
+    RemoveVectoredExceptionHandler(a2);
+    a2 = nullptr;
     return saw;
 }
 
-bool a20()
+bool a5()
 {
 #ifdef _M_X64
     PBYTE pPEB = (PBYTE)__readgsqword(0x60);
@@ -214,10 +48,9 @@ bool a20()
     return (*(pPEB + 2) != 0);
 }
 
-typedef NTSTATUS(NTAPI* NtQueryInformationProcess_t)(
-    HANDLE, PROCESSINFOCLASS, PVOID, ULONG, PULONG);
+typedef NTSTATUS(NTAPI* NtQueryInformationProcess_t)(HANDLE, PROCESSINFOCLASS, PVOID, ULONG, PULONG);
 
-bool a21(LPCSTR funcName)
+bool a6(LPCSTR funcName)
 {
     HMODULE hNt = GetModuleHandleW(L"ntdll.dll");
     if (!hNt) return false;
@@ -238,9 +71,9 @@ bool a21(LPCSTR funcName)
 #endif
 }
 
-bool a22() { return !a21("NtQueryInformationProcess"); }
+bool a7() { return !a6("NtQueryInformationProcess"); }
 
-bool a23()
+bool a8()
 {
     HMODULE hNt = GetModuleHandleW(L"ntdll.dll");
     if (!hNt) return false;
@@ -252,7 +85,7 @@ bool a23()
     return (st == 0 && debugPort != 0);
 }
 
-bool a24()
+bool a9()
 {
     HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
     if (snap == INVALID_HANDLE_VALUE) return false;
@@ -296,7 +129,7 @@ bool a24()
     return detected;
 }
 
-bool a25(void* address)
+bool a10(void* address)
 {
     unsigned char byte = 0;
     SIZE_T read = 0;
@@ -305,149 +138,160 @@ bool a25(void* address)
     return false;
 }
 
-static bool a26(const std::string& input_b64,
-    const std::string& a, const std::string& b,
-    const std::string& c, const std::string& d)
-{
-    size_t totalLen = a.size() + b.size() + c.size() + d.size();
-    if (input_b64.size() != totalLen) return false;
+void* a11[] = {
+    reinterpret_cast<void*>(&IsDebuggerPresent),
+    reinterpret_cast<void*>(&a4)
+};
 
-    volatile unsigned diff = 0;
-    size_t pos = 0;
-
-    for (char ch : a) diff |= static_cast<unsigned char>(input_b64[pos++]) ^ static_cast<unsigned char>(ch);
-    for (char ch : b) diff |= static_cast<unsigned char>(input_b64[pos++]) ^ static_cast<unsigned char>(ch);
-    for (char ch : c) diff |= static_cast<unsigned char>(input_b64[pos++]) ^ static_cast<unsigned char>(ch);
-    for (char ch : d) diff |= static_cast<unsigned char>(input_b64[pos++]) ^ static_cast<unsigned char>(ch);
-
-    return diff == 0;
+std::string a12(const std::string& s, char key) {
+    std::string r = s;
+    for (auto& c : r) c ^= key;
+    return r;
 }
 
-constexpr unsigned char a27 = 0xAA;
-unsigned char a28[] = { static_cast<unsigned char>('M') ^ a27, static_cast<unsigned char>('T') ^ a27 };
-unsigned char a29[] = { static_cast<unsigned char>('M') ^ a27, static_cast<unsigned char>('z') ^ a27 };
-unsigned char a30[] = { static_cast<unsigned char>('N') ^ a27, static_cast<unsigned char>('w') ^ a27 };
-unsigned char a31[] = { static_cast<unsigned char>('=') ^ a27, static_cast<unsigned char>('=') ^ a27 };
+std::vector<std::string> a13 = {
+    a12("U29tZV9z", 0x5A),
+    a12("ZWNyZXRf", 0x5A),
+    a12("cGFydF8x", 0x5A)
+};
 
-std::string a32 = "TGVnaXRpbWF0ZSBDb3B5";
-std::string a33 = "SWxsZWdpdGltYXRlIENvcHk=";
-std::string a34 = "RW50ZXIgeW91ciBzZWNyZXQga2V5OiA=";
+bool a14(const std::string& a, const std::string& b) {
+    if (a.size() != b.size()) return false;
+    unsigned char a15 = 0;
+    for (size_t i = 0; i < a.size(); ++i) a15 |= a[i] ^ b[i];
+    return a15 == 0;
+}
 
-int a60()
+struct a16 { std::string a17; char key; };
+
+std::string a18() {
+    std::string s;
+    for (auto& a19 : a13) s += a12(a19, 0x5A);
+    return s;
+}
+
+void a20(const std::vector<std::pair<std::string, char>>& a21) {
+    for (auto& p : a21)
+        std::cout << a12(p.first, p.second);
+    std::cout << std::endl;
+}
+
+std::string a21(const std::string& in) {
+    static const std::string a22 =
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    std::string out;
+    int a23 = 0, a24 = -6;
+    for (unsigned char c : in) {
+        a23 = (a23 << 8) + c;
+        a24 += 8;
+        while (a24 >= 0) {
+            out.push_back(a22[(a23 >> a24) & 0x3F]);
+            a24 -= 6;
+        }
+    }
+    if (a24 > -6) out.push_back(a22[((a23 << 8) >> (a24 + 8)) & 0x3F]);
+    while (out.size() % 4) out.push_back('=');
+    return out;
+}
+
+int a26()
 {
-    _setmode(_fileno(stdin), _O_U16TEXT);
-    _setmode(_fileno(stdout), _O_U16TEXT);
+    SetConsoleOutputCP(CP_UTF8);
+    SetConsoleCP(CP_UTF8);
 
-    a14(L"X64dbg Multi-layer debugger detection demo (with HW/SW breakpoints)\n");
+    bool a25 = false;
 
-    bool a35 = false;
+    a25 |= (IsDebuggerPresent() != 0);
+    a25 |= a5();
+    a25 |= !a4();
+    a25 |= a7();
+    a25 |= a8();
+    a25 |= a9();
 
-    a35 |= (IsDebuggerPresent() != 0);
-    a35 |= a20();
-    a35 |= !a19();
-    a35 |= a22();
-    a35 |= a23();
-    a35 |= a24();
-
-    void* a36[] = { reinterpret_cast<void*>(&IsDebuggerPresent),
-                                   reinterpret_cast<void*>(&a19) };
-    for (void* a37 : a36) {
-        if (a25(a37)) a35 = true;
-    }
-
-    std::wstring a38;
+    for (void* a26 : a11)
     {
-        std::vector<unsigned char> a39 = a3(a32); 
-        std::string a40(a39.begin(), a39.end());     
-        a38 = a5(a40);                     
-        a7(a39);                                          
-        a6(a40);
+        if (a10(a26))
+            a25 = true;
     }
 
-    std::wstring a41;
+    char a27 = 0x55;
+
+    std::vector<std::pair<std::string, char>> a28 = {
+        {"\x1F",0x5A},{"\x35",0x5B},{"\x28",0x5C},{"\x38",0x5D},{"\x2C",0x5E},{"\x7F",0x5F},
+        {"\x13",0x60},{"\x04",0x61},{"\x01",0x62},{"\x11",0x63},{"\x01",0x64},{"\x11",0x65},{"\x46",0x66},
+        {"\x0C",0x67},{"\x0D",0x68},{"\x10",0x69},{"\x50",0x6A},{"\x4B",0x6B}
+    };
+
+    std::vector<std::pair<std::string, char>> a29 = {
+        {"\x2D",0x6C},{"\x0E",0x6D},{"\x0D",0x6E},{"\x0A",0x6F},{"\x03",0x70},{"\x02",0x71},{"\x52",0x72},
+        {"\x14",0x73},{"\x06",0x74},{"\x14",0x75},{"\x18",0x76},{"\x03",0x77},{"\x1D",0x78},{"\x1D",0x79},
+        {"\x54",0x7A},{"\x71",0x7B}
+    };
+
+    std::vector<std::pair<std::string, char>> a30 = {
+        {"\x6A",0x23}, // I
+        {"\x2D",0x41}, // l
+        {"\x7E",0x12}, // l
+        {"\x30",0x55}, // e
+        {"\x54",0x33}, // g
+        {"\x25",0x44}, // a
+        {"\x4D",0x21}, // l
+        {"\x0A",0x2A}, // ' '
+        {"\x3C",0x5F}, // c
+        {"\x54",0x3B}, // o
+        {"\x3D",0x4D}, // p
+        {"\x15",0x6C}, // y
+        {"\x0C",0x22}  // .
+    };
+
+    std::vector<std::pair<std::string, char>> a31 = {
+        {"\xDF",0x8F},{"\xE2",0x90},{"\xF4",0x91},{"\xE1",0x92},{"\xE0",0x93},{"\xB4",0x94},
+        {"\xD0",0x95},{"\xF8",0x96},{"\xE3",0x97},{"\xFD",0x98},{"\xEB",0x99},{"\xBA",0x9A},
+        {"\xEF",0x9B},{"\xF3",0x9C},{"\xBD",0x9D},{"\xFB",0x9E},{"\xE7",0x9F},{"\xC9",0xA0},
+        {"\xD5",0xA1},{"\x8C",0xA2},{"\x8C",0xA2},{"\x8C",0xA2}
+    };
+
+    if (a25)
     {
-        std::vector<unsigned char> a42 = a3(a33);
-        std::string a43(a42.begin(), a42.end());
-        a41 = a5(a43);
-        a7(a42);
-        a6(a43);
+        a20(a30);
+        ExitProcess(1);
     }
 
-    if (a35) {
-        a14(a41);
-        
-        a6(a32); a6(a33); a6(a34);
-        return 1;
-    }
+    a20(a28);
+    std::string a32;
+    std::getline(std::cin, a32);
+    std::string a33 = a21(a32);
 
-    std::wstring a44;
+    a25 |= (IsDebuggerPresent() != 0);
+    a25 |= a5();
+    a25 |= !a4();
+    a25 |= a7();
+    a25 |= a8();
+    a25 |= a9();
+
+    if (a25)
     {
-        std::vector<unsigned char> a45 = a3(a34);
-        std::string a46(a45.begin(), a45.end());
-        a44 = a5(a46);
-        a7(a45);
-        a6(a46);
+        a20(a30);
+        ExitProcess(1);
     }
 
-    a14(a44);
+    std::string a34 = a18();
 
-    std::wstring a47;
-    std::getline(std::wcin, a47);
-
-    a35 |= (IsDebuggerPresent() != 0);
-    a35 |= a20();
-    a35 |= !a19();
-    a35 |= a22();
-    a35 |= a23();
-    a35 |= a24();
-
-    if (a35) {
-        a14(a41);
-        a6(a32); a6(a33); a6(a34);
-        return 1;
+    if (a14(a33, a34))
+    {
+        a20(a29);
+    }
+    else
+    {
+        a20(a30);
     }
 
-    std::string a48 = a4(a47);
-    std::string a49 = a2((const unsigned char*)a48.data(), a48.size());
+    a20(a31);
+    std::getline(std::cin, a32);
 
-    a8 a51(a28, sizeof(a28), a27);
-    a8 a53(a29, sizeof(a29), a27);
-    a8 a55(a30, sizeof(a30), a27);
-    a8 a57(a31, sizeof(a31), a27);
-
-    std::string a50 = a51.a10();
-    std::string a52 = a53.a10();
-    std::string a54 = a55.a10();
-    std::string a56 = a57.a10();
-
-    if (a35) {
-        a14(a41);
-        a51.a9(); a53.a9(); a55.a9(); a57.a9();
-        a6(a32); a6(a33); a6(a34);
-        return 1;
-    }
-
-    bool a58 = a26(a49, a50, a52, a54, a56);
-
-    a51.a9(); a53.a9(); a55.a9(); a57.a9();
-    a6(a49);
-    a6(a48);
-    a6(a32); a6(a33); a6(a34);
-
-    if (a58) {
-        a14(a38);
-    }
-    else {
-        a14(a41);
-    }
-
-    a14(L"Press Enter to exit...");
-    std::wstring a59;
-    std::getline(std::wcin, a59);
-
-    return a35 ? 1 : 0;
+    return a25 ? 1 : 0;
 }
 
 int wmain() {
-    return a60();
+    return a26();
 }
