@@ -6,11 +6,150 @@
 #include <string>
 #include <algorithm>
 #include <chrono>
-#include <cstdlib>        
-#include <io.h>      // _setmode
-#include <fcntl.h>   // _O_U16TEXT 
+#include <cstdlib>
+#include <io.h>
+#include <fcntl.h>
+#include <cassert>
 
-std::string b23(const char* name)
+static const char a1[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+std::string a2(const unsigned char* data, size_t len) {
+    std::string out;
+    out.reserve(((len + 2) / 3) * 4);
+
+    size_t i = 0;
+    for (; i + 2 < len; i += 3) {
+        unsigned int n = (data[i] << 16) | (data[i + 1] << 8) | data[i + 2];
+        out.push_back(a1[(n >> 18) & 0x3F]);
+        out.push_back(a1[(n >> 12) & 0x3F]);
+        out.push_back(a1[(n >> 6) & 0x3F]);
+        out.push_back(a1[n & 0x3F]);
+    }
+    if (i < len) {
+        unsigned int n = data[i] << 16;
+        out.push_back(a1[(n >> 18) & 0x3F]);
+        if (i + 1 < len) {
+            n |= (data[i + 1] << 8);
+            out.push_back(a1[(n >> 12) & 0x3F]);
+            out.push_back(a1[(n >> 6) & 0x3F]);
+            out.push_back('=');
+        }
+        else {
+            out.push_back(a1[(n >> 12) & 0x3F]);
+            out.push_back('=');
+            out.push_back('=');
+        }
+    }
+    return out;
+}
+
+std::vector<unsigned char> a3(const std::string& s) {
+    int len = (int)s.size();
+    if (len % 4 != 0) return {};
+    auto dec = std::vector<int>(256, -1);
+    for (int i = 0; i < 64; ++i) dec[(unsigned char)a1[i]] = i;
+    dec['='] = 0;
+
+    std::vector<unsigned char> out;
+    out.reserve((len / 4) * 3);
+    for (int i = 0; i < len; i += 4) {
+        int a = dec[(unsigned char)s[i]];
+        int b = dec[(unsigned char)s[i + 1]];
+        int c = dec[(unsigned char)s[i + 2]];
+        int d = dec[(unsigned char)s[i + 3]];
+        if (a < 0 || b < 0 || c < 0 || d < 0) return {};
+        unsigned int n = (a << 18) | (b << 12) | (c << 6) | d;
+        out.push_back((n >> 16) & 0xFF);
+        if (s[i + 2] != '=') out.push_back((n >> 8) & 0xFF);
+        if (s[i + 3] != '=') out.push_back(n & 0xFF);
+    }
+    return out;
+}
+
+static std::string a4(const std::wstring& ws) {
+    if (ws.empty()) return {};
+    int needed = WideCharToMultiByte(CP_UTF8, 0, ws.data(), (int)ws.size(), nullptr, 0, nullptr, nullptr);
+    if (needed <= 0) return {};
+    std::string out;
+    out.resize(needed);
+    WideCharToMultiByte(CP_UTF8, 0, ws.data(), (int)ws.size(), &out[0], needed, nullptr, nullptr);
+    return out;
+}
+
+static std::wstring a5(const std::string& s) {
+    if (s.empty()) return {};
+    int needed = MultiByteToWideChar(CP_UTF8, 0, s.data(), (int)s.size(), nullptr, 0);
+    if (needed <= 0) return {};
+    std::wstring out;
+    out.resize(needed);
+    MultiByteToWideChar(CP_UTF8, 0, s.data(), (int)s.size(), &out[0], needed);
+    return out;
+}
+
+static void a6(std::string& s) {
+    if (!s.empty()) {
+        SecureZeroMemory(&s[0], s.size());
+        s.clear();
+        s.shrink_to_fit();
+    }
+}
+static void a7(std::vector<unsigned char>& v) {
+    if (!v.empty()) {
+        SecureZeroMemory(v.data(), v.size());
+        v.clear();
+        v.shrink_to_fit();
+    }
+}
+
+class a8 {
+public:
+    a8(const unsigned char* obf_bytes, size_t len, unsigned char xor_key)
+        : xor_key_(xor_key), len_(len)
+    {
+        if (len_ == 0) return;
+        base64_text_.resize(len_);
+        for (size_t i = 0; i < len_; ++i) base64_text_[i] = static_cast<char>(obf_bytes[i] ^ xor_key_);
+        if (!base64_text_.empty()) {
+            VirtualLock(&base64_text_[0], base64_text_.size());
+        }
+    }
+
+    ~a8() {
+        a9();
+    }
+
+    const std::string& a10() const { return base64_text_; }
+
+    std::vector<unsigned char> a11() const {
+        return a3(base64_text_);
+    }
+
+    std::wstring a12() const {
+        std::vector<unsigned char> bytes = a11();
+        if (bytes.empty()) return {};
+        std::string utf8((char*)bytes.data(), bytes.size());
+        std::wstring ret = a5(utf8);
+        a6(utf8);
+        a7(bytes);
+        return ret;
+    }
+
+    void a9() {
+        if (!base64_text_.empty()) {
+            SecureZeroMemory(&base64_text_[0], base64_text_.size());
+            VirtualUnlock(&base64_text_[0], base64_text_.size());
+            base64_text_.clear();
+            base64_text_.shrink_to_fit();
+        }
+    }
+
+private:
+    unsigned char xor_key_;
+    size_t len_;
+    std::string base64_text_;
+};
+
+std::string a13(const char* name)
 {
     char* buf = nullptr;
     size_t len = 0;
@@ -20,9 +159,9 @@ std::string b23(const char* name)
         return val;
     }
     return {};
-}   
+}
 
-void b22(const std::wstring& s)
+void a14(const std::wstring& s)
 {
     HANDLE hOut = GetStdHandle(STD_OUTPUT_HANDLE);
     if (hOut == INVALID_HANDLE_VALUE || hOut == nullptr) {
@@ -35,64 +174,45 @@ void b22(const std::wstring& s)
     WriteConsoleW(hOut, &nl, 1, &written, nullptr);
 }
 
-void b21(const std::wstring& s)
+bool a15()
 {
-    HANDLE hOut = GetStdHandle(STD_OUTPUT_HANDLE);
-    if (hOut == INVALID_HANDLE_VALUE || hOut == nullptr) {
-        std::wcout << s << std::endl;
-        return;
-    }
-    DWORD written = 0;
-    WriteConsoleW(hOut, s.c_str(), static_cast<DWORD>(s.size()), &written, nullptr);
-}
-
-bool b20()
-{
-    std::string v = b23("ANTI_DEBUG");
+    std::string v = a13("ANTI_DEBUG");
     if (v.empty()) return true;
     if (v == "0" || _stricmp(v.c_str(), "false") == 0 || _stricmp(v.c_str(), "no") == 0)
         return false;
     return true;
 }
 
-bool b19()
-{
-    std::string v = b23("ANTI_DEBUG_FORCE");
-    if (v.empty()) return false;
-    if (v == "1" || _stricmp(v.c_str(), "true") == 0) return true;
-    return false;
-}
+volatile LONG a16 = 0;
+PVOID a17 = nullptr;
 
-volatile LONG b18 = 0;
-PVOID b17 = nullptr;
-
-LONG CALLBACK b16(PEXCEPTION_POINTERS ExceptionInfo)
+LONG CALLBACK a18(PEXCEPTION_POINTERS ExceptionInfo)
 {
     if (ExceptionInfo && ExceptionInfo->ExceptionRecord &&
         ExceptionInfo->ExceptionRecord->ExceptionCode == EXCEPTION_BREAKPOINT)
     {
-        InterlockedExchange(&b18, 1);
+        InterlockedExchange(&a16, 1);
         return EXCEPTION_CONTINUE_SEARCH;
     }
     return EXCEPTION_CONTINUE_SEARCH;
 }
 
-bool b15()
+bool a19()
 {
-    b17 = AddVectoredExceptionHandler(1, b16);
-    if (!b17) return false;
-    InterlockedExchange(&b18, 0);
+    a17 = AddVectoredExceptionHandler(1, a18);
+    if (!a17) return false;
+    InterlockedExchange(&a16, 0);
 
     __try { __debugbreak(); }
     __except (EXCEPTION_EXECUTE_HANDLER) {}
 
-    bool saw = (InterlockedCompareExchange(&b18, 0, 0) != 0);
-    RemoveVectoredExceptionHandler(b17);
-    b17 = nullptr;
+    bool saw = (InterlockedCompareExchange(&a16, 0, 0) != 0);
+    RemoveVectoredExceptionHandler(a17);
+    a17 = nullptr;
     return saw;
 }
 
-bool b14()
+bool a20()
 {
 #ifdef _M_X64
     PBYTE pPEB = (PBYTE)__readgsqword(0x60);
@@ -106,7 +226,7 @@ bool b14()
 typedef NTSTATUS(NTAPI* NtQueryInformationProcess_t)(
     HANDLE, PROCESSINFOCLASS, PVOID, ULONG, PULONG);
 
-bool b13(LPCSTR funcName)
+bool a21(LPCSTR funcName)
 {
     HMODULE hNt = GetModuleHandleW(L"ntdll.dll");
     if (!hNt) return false;
@@ -127,9 +247,9 @@ bool b13(LPCSTR funcName)
 #endif
 }
 
-bool b12() { return !b13("NtQueryInformationProcess"); }
+bool a22() { return !a21("NtQueryInformationProcess"); }
 
-bool b11()
+bool a23()
 {
     HMODULE hNt = GetModuleHandleW(L"ntdll.dll");
     if (!hNt) return false;
@@ -141,7 +261,7 @@ bool b11()
     return (st == 0 && debugPort != 0);
 }
 
-bool b10()
+bool a24()
 {
     HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
     if (snap == INVALID_HANDLE_VALUE) return false;
@@ -185,7 +305,7 @@ bool b10()
     return detected;
 }
 
-bool b9(void* address)
+bool a25(void* address)
 {
     unsigned char byte = 0;
     SIZE_T read = 0;
@@ -194,203 +314,149 @@ bool b9(void* address)
     return false;
 }
 
-void* b8[] = {
-    reinterpret_cast<void*>(&IsDebuggerPresent),
-    reinterpret_cast<void*>(&b15)
-};
-
-bool b7(const std::wstring& input,
-    const std::wstring& a,
-    const std::wstring& b,
-    const std::wstring& c,
-    const std::wstring& d)
+static bool a26(const std::string& input_b64,
+    const std::string& a, const std::string& b,
+    const std::string& c, const std::string& d)
 {
-    std::wstring::size_type totalLen = a.size() + b.size() + c.size() + d.size();
-    if (input.size() != totalLen) return false;
+    size_t totalLen = a.size() + b.size() + c.size() + d.size();
+    if (input_b64.size() != totalLen) return false;
 
     volatile unsigned diff = 0;
     size_t pos = 0;
 
-    for (wchar_t ch : a) diff |= input[pos++] ^ ch;
-    for (wchar_t ch : b) diff |= input[pos++] ^ ch;
-    for (wchar_t ch : c) diff |= input[pos++] ^ ch;
-    for (wchar_t ch : d) diff |= input[pos++] ^ ch;
+    for (char ch : a) diff |= static_cast<unsigned char>(input_b64[pos++]) ^ static_cast<unsigned char>(ch);
+    for (char ch : b) diff |= static_cast<unsigned char>(input_b64[pos++]) ^ static_cast<unsigned char>(ch);
+    for (char ch : c) diff |= static_cast<unsigned char>(input_b64[pos++]) ^ static_cast<unsigned char>(ch);
+    for (char ch : d) diff |= static_cast<unsigned char>(input_b64[pos++]) ^ static_cast<unsigned char>(ch);
 
     return diff == 0;
 }
 
-bool b6(std::wstring& s)
-{
-    if (s.empty()) return false;
-    return VirtualLock(&s[0], s.size() * sizeof(wchar_t)) != 0;
-}
+constexpr unsigned char a27 = 0xAA;
+unsigned char a28[] = { static_cast<unsigned char>('M') ^ a27, static_cast<unsigned char>('T') ^ a27 };
+unsigned char a29[] = { static_cast<unsigned char>('M') ^ a27, static_cast<unsigned char>('z') ^ a27 };
+unsigned char a30[] = { static_cast<unsigned char>('N') ^ a27, static_cast<unsigned char>('w') ^ a27 };
+unsigned char a31[] = { static_cast<unsigned char>('=') ^ a27, static_cast<unsigned char>('=') ^ a27 };
 
-void b5(std::wstring& s)
-{
-    if (s.empty()) return;
-    SecureZeroMemory(&s[0], s.size() * sizeof(wchar_t));
-    VirtualUnlock(&s[0], s.size() * sizeof(wchar_t));
-    s.clear();
-    s.shrink_to_fit();
-}
+std::string a32 = "TGVnaXRpbWF0ZSBDb3B5";
+std::string a33 = "SWxsZWdpdGltYXRlIENvcHk=";
+std::string a34 = "RW50ZXIgeW91ciBzZWNyZXQga2V5OiA=";
 
-class b1 {
-private:
-    std::vector<wchar_t> encoded_;
-    wchar_t xorKey_;
-
-public:
-    b1(const std::wstring& secret, wchar_t key = 0xAA)
-        : xorKey_(key)
-    {
-        encoded_.reserve(secret.size());
-        for (auto c : secret)
-            encoded_.push_back(c ^ xorKey_);
-        if (!encoded_.empty())
-            VirtualLock(encoded_.data(), encoded_.size() * sizeof(wchar_t));
-    }
-
-    ~b1() { b3(); }
-
-    bool b2(const std::wstring& input) const
-    {
-        if (input.size() != encoded_.size()) return false;
-        volatile unsigned diff = 0;
-        for (size_t i = 0; i < input.size(); ++i)
-            diff |= (encoded_[i] ^ xorKey_) ^ input[i];
-        return diff == 0;
-    }
-
-    void b3()
-    {
-        if (!encoded_.empty()) {
-            SecureZeroMemory(encoded_.data(), encoded_.size() * sizeof(wchar_t));
-            VirtualUnlock(encoded_.data(), encoded_.size() * sizeof(wchar_t));
-            encoded_.clear();
-        }
-    }
-};
-
-std::wstring b4(const wchar_t* obf, size_t len, wchar_t key)
-{
-    std::wstring out;
-    out.reserve(len);
-    for (size_t i = 0; i < len; ++i)
-        out.push_back(obf[i] ^ key);
-    return out;
-}
-
-int a1()
+int a60()
 {
     _setmode(_fileno(stdin), _O_U16TEXT);
     _setmode(_fileno(stdout), _O_U16TEXT);
 
-    b22(L"X64dbg Multi-layer debugger detection demo (with HW/SW breakpoints)\n");
+    a14(L"X64dbg Multi-layer debugger detection demo (with HW/SW breakpoints)\n");
 
-    bool b24 = false;
+    bool a35 = false;
 
-    b24 |= (IsDebuggerPresent() != 0);
-    b24 |= b14();
-    b24 |= !b15();
-    b24 |= b12();
-    b24 |= b11();
-    b24 |= b10();
+    a35 |= (IsDebuggerPresent() != 0);
+    a35 |= a20();
+    a35 |= !a19();
+    a35 |= a22();
+    a35 |= a23();
+    a35 |= a24();
 
-    for (void* b25 : b8)
-    {
-        if (b9(b25))
-        {
-            b24 = true;
-        }
+    void* a36[] = { reinterpret_cast<void*>(&IsDebuggerPresent),
+                                   reinterpret_cast<void*>(&a19) };
+    for (void* a37 : a36) {
+        if (a25(a37)) a35 = true;
     }
 
-    constexpr wchar_t b26 = 0xAA;
-
-    wchar_t b27[] = { 0x31 ^ b26, 0x33 ^ b26, 0x33 ^ b26, 0x37 ^ b26 };
-    wchar_t b28[] = {
-        L'L' ^ b26,L'e' ^ b26,L'g' ^ b26,L'i' ^ b26,L't' ^ b26,L'i' ^ b26,L'm' ^ b26,L'a' ^ b26,L't' ^ b26,L'e' ^ b26,
-        L' ' ^ b26,L'C' ^ b26,L'o' ^ b26,L'p' ^ b26,L'y' ^ b26
-    };
-    wchar_t b29[] = {
-        L'I' ^ b26,L'l' ^ b26,L'l' ^ b26,L'e' ^ b26,L'g' ^ b26,L'i' ^ b26,L't' ^ b26,L'i' ^ b26,L'm' ^ b26,L'a' ^ b26,L't' ^ b26,L'e' ^ b26,
-        L' ' ^ b26,L'C' ^ b26,L'o' ^ b26,L'p' ^ b26,L'y' ^ b26
-    };
-    wchar_t b30[] = {
-        L'E' ^ b26,L'n' ^ b26,L't' ^ b26,L'e' ^ b26,L'r' ^ b26,L' ' ^ b26,L'y' ^ b26,L'o' ^ b26,L'u' ^ b26,L'r' ^ b26,
-        L' ' ^ b26,L's' ^ b26,L'e' ^ b26,L'c' ^ b26,L'r' ^ b26,L'e' ^ b26,L't' ^ b26,L' ' ^ b26,L'k' ^ b26,L'e' ^ b26,L'y' ^ b26,L':' ^ b26,L' ' ^ b26
-    };
-
-    std::wstring b31 = b4(b27, 4, b26);
-    std::wstring b32 = b4(b28, 15, b26);
-    std::wstring b33 = b4(b29, 17, b26);
-    std::wstring b34 = b4(b30, 23, b26);
-
-    if (!b6(b31))
+    std::wstring a38;
     {
-        b5(b31);
-        b5(b32);
-        b5(b33);
-        b5(b34);
-        ExitProcess(1);
+        std::vector<unsigned char> a39 = a3(a32); 
+        std::string a40(a39.begin(), a39.end());     
+        a38 = a5(a40);                     
+        a7(a39);                                          
+        a6(a40);
     }
 
-    if (b24)
+    std::wstring a41;
     {
-        b5(b31);
-        b5(b32);
-        b22(b33);
-        b5(b33);
-        b5(b34);
-
-        ExitProcess(1);
+        std::vector<unsigned char> a42 = a3(a33);
+        std::string a43(a42.begin(), a42.end());
+        a41 = a5(a43);
+        a7(a42);
+        a6(a43);
     }
 
-    b22(b34);
-
-    std::wstring b35;
-    std::getline(std::wcin, b35);
-
-    b24 |= (IsDebuggerPresent() != 0);
-    b24 |= b14();
-    b24 |= !b15();
-    b24 |= b12();
-    b24 |= b11();
-    b24 |= b10();
-
-    if (b24)
-    {
-        b5(b31);
-        b5(b32);
-        b22(b33);
-        b5(b33);
-        b5(b34);
-
-        ExitProcess(1);
+    if (a35) {
+        a14(a41);
+        
+        a6(a32); a6(a33); a6(a34);
+        return 1;
     }
 
-    if (b7(b35, b31.substr(0, 1), b31.substr(1, 1),
-        b31.substr(2, 1), b31.substr(3, 1)))
+    std::wstring a44;
     {
-        b5(b31);
-        b22(b32);
-    }
-    else
-    {
-        b5(b31);
-        b22(b33);
+        std::vector<unsigned char> a45 = a3(a34);
+        std::string a46(a45.begin(), a45.end());
+        a44 = a5(a46);
+        a7(a45);
+        a6(a46);
     }
 
-    b5(b32);
-    b5(b33);
-    b5(b34);
+    a14(a44);
 
-    b22(L"Press Enter to exit...");
-    std::wstring dummy;
-    std::getline(std::wcin, dummy);
+    std::wstring a47;
+    std::getline(std::wcin, a47);
 
-    return b24 ? 1 : 0;
+    a35 |= (IsDebuggerPresent() != 0);
+    a35 |= a20();
+    a35 |= !a19();
+    a35 |= a22();
+    a35 |= a23();
+    a35 |= a24();
+
+    if (a35) {
+        a14(a41);
+        a6(a32); a6(a33); a6(a34);
+        return 1;
+    }
+
+    std::string a48 = a4(a47);
+    std::string a49 = a2((const unsigned char*)a48.data(), a48.size());
+
+    a8 a51(a28, sizeof(a28), a27);
+    a8 a53(a29, sizeof(a29), a27);
+    a8 a55(a30, sizeof(a30), a27);
+    a8 a57(a31, sizeof(a31), a27);
+
+    std::string a50 = a51.a10();
+    std::string a52 = a53.a10();
+    std::string a54 = a55.a10();
+    std::string a56 = a57.a10();
+
+    if (a35) {
+        a14(a41);
+        a51.a9(); a53.a9(); a55.a9(); a57.a9();
+        a6(a32); a6(a33); a6(a34);
+        return 1;
+    }
+
+    bool a58 = a26(a49, a50, a52, a54, a56);
+
+    a51.a9(); a53.a9(); a55.a9(); a57.a9();
+    a6(a49);
+    a6(a48);
+    a6(a32); a6(a33); a6(a34);
+
+    if (a58) {
+        a14(a38);
+    }
+    else {
+        a14(a41);
+    }
+
+    a14(L"Press Enter to exit...");
+    std::wstring a59;
+    std::getline(std::wcin, a59);
+
+    return a35 ? 1 : 0;
 }
 
 int wmain() {
-    return a1();
+    return a60();
 }
