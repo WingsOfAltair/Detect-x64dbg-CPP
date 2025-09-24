@@ -1,12 +1,7 @@
 {
   "Version": 1,
   "WorkspaceRootPath": "D:\\GitHub\\Detect-x64dbg-CPP\\",
-  "Documents": [
-    {
-      "AbsoluteMoniker": "D:0:0:{FE0DB549-2CAB-4162-8266-EA4990D1A01B}|Detect-X64dbg-CPP.vcxproj|D:\\GitHub\\Detect-x64dbg-CPP\\x64dbg-WINDOWS-Detector.cpp||{D0E1A5C6-B359-4E41-9B60-3365922C2A22}",
-      "RelativeMoniker": "D:0:0:{FE0DB549-2CAB-4162-8266-EA4990D1A01B}|Detect-X64dbg-CPP.vcxproj|solutionrelative:x64dbg-WINDOWS-Detector.cpp||{D0E1A5C6-B359-4E41-9B60-3365922C2A22}"
-    }
-  ],
+  "Documents": [],
   "DocumentGroupContainers": [
     {
       "Orientation": 0,
@@ -14,7 +9,7 @@
       "DocumentGroups": [
         {
           "DockedWidth": 200,
-          "SelectedChildIndex": 27,
+          "SelectedChildIndex": -1,
           "Children": [
             {
               "$type": "Bookmark",
@@ -123,19 +118,6 @@
             {
               "$type": "Bookmark",
               "Name": "ST:153:0:{116d2292-e37d-41cd-a077-ebacac4c8cc4}"
-            },
-            {
-              "$type": "Document",
-              "DocumentIndex": 0,
-              "Title": "x64dbg-WINDOWS-Detector.cpp",
-              "DocumentMoniker": "D:\\GitHub\\Detect-x64dbg-CPP\\x64dbg-WINDOWS-Detector.cpp",
-              "RelativeDocumentMoniker": "x64dbg-WINDOWS-Detector.cpp",
-              "ToolTip": "D:\\GitHub\\Detect-x64dbg-CPP\\x64dbg-WINDOWS-Detector.cpp",
-              "RelativeToolTip": "x64dbg-WINDOWS-Detector.cpp",
-              "ViewState": "AgIAALMAAAAAAAAAAAAAAMAAAAAFAAAAAAAAAA==",
-              "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.000677|",
-              "WhenOpened": "2025-09-24T09:37:51.143Z",
-              "EditorCaption": ""
             }
           ]
         }

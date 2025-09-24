@@ -1,202 +1,16 @@
-// detector_with_obf_class.cpp
-// Restores ObfuscatedSecret class for obfuscated byte arrays (base64 parts and messages).
-// Compile with MSVC (x64) - uses Windows APIs.
-
 #include <windows.h>
 #include <tlhelp32.h>
-#include <winternl.h>
+#include <wincrypt.h>
 #include <iostream>
-#include <vector>
 #include <string>
-#include <algorithm>
-#include <chrono>
-#include <cstdlib>
-#include <io.h>      // _setmode
-#include <fcntl.h>   // _O_U16TEXT
-#include <cassert>
+#include <vector>
+#include <winternl.h>
+#include <Windows.h>
+#include <Wincrypt.h>
 
-// --------------------------- Utility: base64 encoder/decoder (RFC4648, no newlines) ---------------------------
+// --------------------------- Anti-debug helpers ---------------------------
 
-static const char b64_table[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-
-std::string base64_encode_bytes(const unsigned char* data, size_t len) {
-    std::string out;
-    out.reserve(((len + 2) / 3) * 4);
-
-    size_t i = 0;
-    for (; i + 2 < len; i += 3) {
-        unsigned int n = (data[i] << 16) | (data[i + 1] << 8) | data[i + 2];
-        out.push_back(b64_table[(n >> 18) & 0x3F]);
-        out.push_back(b64_table[(n >> 12) & 0x3F]);
-        out.push_back(b64_table[(n >> 6) & 0x3F]);
-        out.push_back(b64_table[n & 0x3F]);
-    }
-    if (i < len) {
-        unsigned int n = data[i] << 16;
-        out.push_back(b64_table[(n >> 18) & 0x3F]);
-        if (i + 1 < len) {
-            n |= (data[i + 1] << 8);
-            out.push_back(b64_table[(n >> 12) & 0x3F]);
-            out.push_back(b64_table[(n >> 6) & 0x3F]);
-            out.push_back('=');
-        }
-        else {
-            out.push_back(b64_table[(n >> 12) & 0x3F]);
-            out.push_back('=');
-            out.push_back('=');
-        }
-    }
-    return out;
-}
-
-// decode base64 into bytes (returns empty on invalid)
-std::vector<unsigned char> base64_decode_to_bytes(const std::string& s) {
-    // Quick decoder suitable for valid RFC4648 base64 (no newlines). Not extremely defensive.
-    int len = (int)s.size();
-    if (len % 4 != 0) return {};
-    auto dec = std::vector<int>(256, -1);
-    for (int i = 0; i < 64; ++i) dec[(unsigned char)b64_table[i]] = i;
-    dec['='] = 0;
-
-    std::vector<unsigned char> out;
-    out.reserve((len / 4) * 3);
-    for (int i = 0; i < len; i += 4) {
-        int a = dec[(unsigned char)s[i]];
-        int b = dec[(unsigned char)s[i + 1]];
-        int c = dec[(unsigned char)s[i + 2]];
-        int d = dec[(unsigned char)s[i + 3]];
-        if (a < 0 || b < 0 || c < 0 || d < 0) return {};
-        unsigned int n = (a << 18) | (b << 12) | (c << 6) | d;
-        out.push_back((n >> 16) & 0xFF);
-        if (s[i + 2] != '=') out.push_back((n >> 8) & 0xFF);
-        if (s[i + 3] != '=') out.push_back(n & 0xFF);
-    }
-    return out;
-}
-
-// UTF conversion helper: wstring -> UTF-8
-static std::string utf8_from_wstring(const std::wstring& ws) {
-    if (ws.empty()) return {};
-    int needed = WideCharToMultiByte(CP_UTF8, 0, ws.data(), (int)ws.size(), nullptr, 0, nullptr, nullptr);
-    if (needed <= 0) return {};
-    std::string out;
-    out.resize(needed);
-    WideCharToMultiByte(CP_UTF8, 0, ws.data(), (int)ws.size(), &out[0], needed, nullptr, nullptr);
-    return out;
-}
-
-// UTF conversion helper: UTF-8 -> wstring
-static std::wstring wstring_from_utf8(const std::string& s) {
-    if (s.empty()) return {};
-    int needed = MultiByteToWideChar(CP_UTF8, 0, s.data(), (int)s.size(), nullptr, 0);
-    if (needed <= 0) return {};
-    std::wstring out;
-    out.resize(needed);
-    MultiByteToWideChar(CP_UTF8, 0, s.data(), (int)s.size(), &out[0], needed);
-    return out;
-}
-
-// Secure zero for std::string / vector
-static void secure_zero_string(std::string& s) {
-    if (!s.empty()) {
-        SecureZeroMemory(&s[0], s.size());
-        s.clear();
-        s.shrink_to_fit();
-    }
-}
-static void secure_zero_vector(std::vector<unsigned char>& v) {
-    if (!v.empty()) {
-        SecureZeroMemory(v.data(), v.size());
-        v.clear();
-        v.shrink_to_fit();
-    }
-}
-
-// --------------------------- ObfuscatedSecret class (for XOR-obf byte arrays) ---------------------------
-class ObfuscatedSecret {
-    // Stores XOR-obfuscated bytes in static data (in your binary).
-    // At runtime we decode into base64_text_ (std::string), optionally lock it, then
-    // provide methods to obtain the plaintext wstring (by base64-decoding to bytes
-    // and converting from UTF-8).
-public:
-    ObfuscatedSecret(const unsigned char* obf_bytes, size_t len, unsigned char xor_key)
-        : xor_key_(xor_key), len_(len)
-    {
-        if (len_ == 0) return;
-        // decode XOR into temporary base64 text
-        base64_text_.resize(len_);
-        for (size_t i = 0; i < len_; ++i) base64_text_[i] = static_cast<char>(obf_bytes[i] ^ xor_key_);
-        // attempt to lock the decoded base64 text in memory
-        if (!base64_text_.empty()) {
-            VirtualLock(&base64_text_[0], base64_text_.size());
-        }
-    }
-
-    ~ObfuscatedSecret() {
-        secure_clear();
-    }
-
-    // Return the base64 text (non-owning copy). Caller should not keep it long.
-    const std::string& get_base64_text() const { return base64_text_; }
-
-    // Decode into UTF-8 plaintext bytes (base64 -> bytes)
-    std::vector<unsigned char> decode_base64_to_bytes() const {
-        return base64_decode_to_bytes(base64_text_);
-    }
-
-    // Decode into wstring (assumes original plaintext was UTF-8)
-    std::wstring reveal_wstring() const {
-        std::vector<unsigned char> bytes = decode_base64_to_bytes();
-        if (bytes.empty()) return {};
-        std::string utf8((char*)bytes.data(), bytes.size());
-        std::wstring ret = wstring_from_utf8(utf8);
-        secure_zero_string(utf8);
-        secure_zero_vector(bytes);
-        return ret;
-    }
-
-    void secure_clear() {
-        if (!base64_text_.empty()) {
-            SecureZeroMemory(&base64_text_[0], base64_text_.size());
-            VirtualUnlock(&base64_text_[0], base64_text_.size());
-            base64_text_.clear();
-            base64_text_.shrink_to_fit();
-        }
-    }
-
-private:
-    unsigned char xor_key_;
-    size_t len_;
-    std::string base64_text_; // holds decoded (XORed) base64 text
-};
-
-// --------------------------- Anti-debug helpers (same as before) ---------------------------
-
-std::string safe_getenv(const char* name)
-{
-    char* buf = nullptr;
-    size_t len = 0;
-    if (_dupenv_s(&buf, &len, name) == 0 && buf != nullptr) {
-        std::string val(buf);
-        free(buf);
-        return val;
-    }
-    return {};
-}
-
-void PrintWide(const std::wstring& s)
-{
-    HANDLE hOut = GetStdHandle(STD_OUTPUT_HANDLE);
-    if (hOut == INVALID_HANDLE_VALUE || hOut == nullptr) {
-        std::wcout << s << std::endl;
-        return;
-    }
-    DWORD written = 0;
-    WriteConsoleW(hOut, s.c_str(), static_cast<DWORD>(s.size()), &written, nullptr);
-    const wchar_t nl = L'\n';
-    WriteConsoleW(hOut, &nl, 1, &written, nullptr);
-}
-
+// VEH breakpoint
 volatile LONG g_veh_seen_bp = 0;
 PVOID g_veh_handle = nullptr;
 
@@ -226,6 +40,7 @@ bool veh_breakpoint_test()
     return saw;
 }
 
+// PEB check
 bool check_peb_being_debugged()
 {
 #ifdef _M_X64
@@ -237,8 +52,8 @@ bool check_peb_being_debugged()
     return (*(pPEB + 2) != 0);
 }
 
-typedef NTSTATUS(NTAPI* NtQueryInformationProcess_t)(
-    HANDLE, PROCESSINFOCLASS, PVOID, ULONG, PULONG);
+// NtQueryInformationProcess / ProcessDebugPort
+typedef NTSTATUS(NTAPI* NtQueryInformationProcess_t)(HANDLE, PROCESSINFOCLASS, PVOID, ULONG, PULONG);
 
 bool ntdll_function_looks_orig(LPCSTR funcName)
 {
@@ -275,6 +90,7 @@ bool check_process_debug_port_via_nt()
     return (st == 0 && debugPort != 0);
 }
 
+// Hardware breakpoints
 bool any_thread_has_hw_breakpoints()
 {
     HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
@@ -319,6 +135,7 @@ bool any_thread_has_hw_breakpoints()
     return detected;
 }
 
+// Software breakpoints
 bool check_software_breakpoint(void* address)
 {
     unsigned char byte = 0;
@@ -328,72 +145,71 @@ bool check_software_breakpoint(void* address)
     return false;
 }
 
-// --------------------------- constant-time split compare for base64 strings ---------------------------
-static bool constant_time_equal_split_b64(const std::string& input_b64,
-    const std::string& a, const std::string& b,
-    const std::string& c, const std::string& d)
-{
-    size_t totalLen = a.size() + b.size() + c.size() + d.size();
-    if (input_b64.size() != totalLen) return false;
+// Critical addresses to check for SW breakpoints
+void* critical_addresses[] = {
+    reinterpret_cast<void*>(&IsDebuggerPresent),
+    reinterpret_cast<void*>(&veh_breakpoint_test)
+};
 
-    volatile unsigned diff = 0;
-    size_t pos = 0;
+std::string xor_string(const std::string& s, char key) {
+    std::string r = s;
+    for (auto& c : r) c ^= key; // decode at runtime
+    return r;
+}
 
-    for (char ch : a) diff |= static_cast<unsigned char>(input_b64[pos++]) ^ static_cast<unsigned char>(ch);
-    for (char ch : b) diff |= static_cast<unsigned char>(input_b64[pos++]) ^ static_cast<unsigned char>(ch);
-    for (char ch : c) diff |= static_cast<unsigned char>(input_b64[pos++]) ^ static_cast<unsigned char>(ch);
-    for (char ch : d) diff |= static_cast<unsigned char>(input_b64[pos++]) ^ static_cast<unsigned char>(ch);
+std::vector<std::string> secret_fragments = {
+    xor_string("U29tZV9z", 0x5A),
+    xor_string("ZWNyZXRf", 0x5A),
+    xor_string("cGFydF8x", 0x5A)
+};
 
+// --------------------------- Base64 split comparison ----------------
+bool constant_time_compare(const std::string& a, const std::string& b) {
+    if (a.size() != b.size()) return false;
+    unsigned char diff = 0;
+    for (size_t i = 0; i < a.size(); ++i) diff |= a[i] ^ b[i];
     return diff == 0;
 }
 
-// --------------------------- Example obfuscated secret parts (kept as character XOR expressions) ---------------------------
-// For small secret parts it's okay to show the obfuscated-by-expression approach.
-// Example secret "1337" -> base64 "MTMzNw==" -> split "MT","Mz","Nw","=="
-constexpr unsigned char KEY = 0xAA;
-unsigned char secret_part1_obf[] = { static_cast<unsigned char>('M') ^ KEY, static_cast<unsigned char>('T') ^ KEY }; // "MT"
-unsigned char secret_part2_obf[] = { static_cast<unsigned char>('M') ^ KEY, static_cast<unsigned char>('z') ^ KEY }; // "Mz"
-unsigned char secret_part3_obf[] = { static_cast<unsigned char>('N') ^ KEY, static_cast<unsigned char>('w') ^ KEY }; // "Nw"
-unsigned char secret_part4_obf[] = { static_cast<unsigned char>('=') ^ KEY, static_cast<unsigned char>('=') ^ KEY }; // "=="
+// ------------------- Fixed secret key (split + XOR) -------------------
+struct Fragment { std::string data; char key; };
 
-// --------------------------- Example base64-encoded messages (these are base64 text, you can XOR-obfuscate in the binary) ----
-// If you want these *obfuscated in the binary* as well, run the small generator script in the comments below and replace these with the produced unsigned char[] arrays.
-
-std::string b64_legit = "TGVnaXRpbWF0ZSBDb3B5";
-std::string b64_illegit = "SWxsZWdpdGltYXRlIENvcHk=";
-std::string b64_prompt = "RW50ZXIgeW91ciBzZWNyZXQga2V5OiA=";
-
-// ---------- If you want to embed those base64 strings XOR-obfuscated in the binary ----------
-// Run this tiny helper program locally (or implement equivalent in your build script) to produce
-// C initializers for obfuscated arrays (then paste the initializer into the source).
-/*
-#include <iostream>
-#include <iomanip>
-#include <string>
-int main() {
-    std::string s = "TGVnaXRpbWF0ZSBDb3B5"; // replace with desired base64 text
-    unsigned char key = 0xAA;
-    std::cout << "unsigned char my_obf[] = { ";
-    for (size_t i = 0; i < s.size(); ++i) {
-        unsigned char v = static_cast<unsigned char>(s[i]) ^ key;
-        std::cout << "0x" << std::hex << std::setw(2) << std::setfill('0') << (int)v;
-        if (i + 1 < s.size()) std::cout << ", ";
-    }
-    std::cout << " }; // len=" << std::dec << s.size() << "\\n";
-    return 0;
+std::string reconstruct_secret() {
+    std::string s;
+    for (auto& frag : secret_fragments) s += xor_string(frag, 0x5A);
+    return s;
 }
-*/
-// After producing the initializer, replace the std::string b64_legit above with an ObfuscatedSecret using
-// the produced array and ObfuscatedSecret constructor.
 
-// --------------------------- Main ---------------------------
+void print_fragments(const std::vector<std::pair<std::string, char>>& frags) {
+    for (auto& p : frags)
+        std::cout << xor_string(p.first, p.second);
+    std::cout << std::endl;
+}
 
-int wmain()
+std::string base64_encode(const std::string& in) {
+    static const std::string chars =
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    std::string out;
+    int val = 0, valb = -6;
+    for (unsigned char c : in) {
+        val = (val << 8) + c;
+        valb += 8;
+        while (valb >= 0) {
+            out.push_back(chars[(val >> valb) & 0x3F]);
+            valb -= 6;
+        }
+    }
+    if (valb > -6) out.push_back(chars[((val << 8) >> (valb + 8)) & 0x3F]);
+    while (out.size() % 4) out.push_back('=');
+    return out;
+}
+
+// --------------------------- Main ----------------
+int main()
 {
-    _setmode(_fileno(stdin), _O_U16TEXT);
-    _setmode(_fileno(stdout), _O_U16TEXT);
-
-    PrintWide(L"X64dbg Multi-layer debugger detection demo (with HW/SW breakpoints)\n");
+    // Lock console for UTF-8 input/output
+    SetConsoleOutputCP(CP_UTF8);
+    SetConsoleCP(CP_UTF8);
 
     bool debuggerDetected = false;
 
@@ -404,66 +220,64 @@ int wmain()
     debuggerDetected |= check_process_debug_port_via_nt();
     debuggerDetected |= any_thread_has_hw_breakpoints();
 
-    // critical addresses check (small example)
-    void* critical_addresses[] = { reinterpret_cast<void*>(&IsDebuggerPresent),
-                                   reinterpret_cast<void*>(&veh_breakpoint_test) };
-    for (void* addr : critical_addresses) {
-        if (check_software_breakpoint(addr)) debuggerDetected = true;
-    }
-
-    // For simplicity here we use base64 literals (still not the plaintext in binary).
-    // Convert them to wstring now (decode base64 -> bytes -> utf8 -> wstring)
-    // --- safe decoding for legit, illegit, prompt (replace the 3 one-liners) ---
-
-    // decode legit
-    std::wstring legit_w;
+    for (void* addr : critical_addresses)
     {
-        std::vector<unsigned char> tmp = base64_decode_to_bytes(b64_legit); // decode once
-        std::string tmp_utf8(tmp.begin(), tmp.end());                        // bytes -> utf8 string
-        legit_w = wstring_from_utf8(tmp_utf8);                               // utf8 -> wstring
-        secure_zero_vector(tmp);                                             // wipe tmp bytes
-        secure_zero_string(tmp_utf8);                                        // wipe tmp utf8
+        if (check_software_breakpoint(addr))
+            debuggerDetected = true;
     }
 
-    // decode illegit
-    std::wstring illegit_w;
+    char xor_key = 0x55;
+
+    std::vector<std::pair<std::string, char>> prompt_fragments = {
+        {"\x1F",0x5A},{"\x35",0x5B},{"\x28",0x5C},{"\x38",0x5D},{"\x2C",0x5E},{"\x7F",0x5F},
+        {"\x13",0x60},{"\x04",0x61},{"\x01",0x62},{"\x11",0x63},{"\x01",0x64},{"\x11",0x65},{"\x46",0x66},
+        {"\x0C",0x67},{"\x0D",0x68},{"\x10",0x69},{"\x50",0x6A},{"\x4B",0x6B}
+    };
+
+    // Access message: "Access granted.\n"
+    std::vector<std::pair<std::string, char>> access_fragments = {
+        {"\x2D",0x6C},{"\x0E",0x6D},{"\x0D",0x6E},{"\x0A",0x6F},{"\x03",0x70},{"\x02",0x71},{"\x52",0x72},
+        {"\x14",0x73},{"\x06",0x74},{"\x14",0x75},{"\x18",0x76},{"\x03",0x77},{"\x1D",0x78},{"\x1D",0x79},
+        {"\x54",0x7A},{"\x71",0x7B}
+    };
+
+    // Fail message: "Illegitimate copy.\n"
+    std::vector<std::pair<std::string, char>> fail_fragments = {
+        {"\x6A",0x23}, // I
+        {"\x2D",0x41}, // l
+        {"\x7E",0x12}, // l
+        {"\x30",0x55}, // e
+        {"\x54",0x33}, // g
+        {"\x25",0x44}, // a
+        {"\x4D",0x21}, // l
+        {"\x0A",0x2A}, // ' '
+        {"\x3C",0x5F}, // c
+        {"\x54",0x3B}, // o
+        {"\x3D",0x4D}, // p
+        {"\x15",0x6C}, // y
+        {"\x0C",0x22}  // .
+     };
+
+    // Exit message: "Press Enter to exit..."
+    std::vector<std::pair<std::string, char>> exit_fragments = {
+        {"\xDF",0x8F},{"\xE2",0x90},{"\xF4",0x91},{"\xE1",0x92},{"\xE0",0x93},{"\xB4",0x94},
+        {"\xD0",0x95},{"\xF8",0x96},{"\xE3",0x97},{"\xFD",0x98},{"\xEB",0x99},{"\xBA",0x9A},
+        {"\xEF",0x9B},{"\xF3",0x9C},{"\xBD",0x9D},{"\xFB",0x9E},{"\xE7",0x9F},{"\xC9",0xA0},
+        {"\xD5",0xA1},{"\x8C",0xA2},{"\x8C",0xA2},{"\x8C",0xA2}
+    };
+
+    if (debuggerDetected)
     {
-        std::vector<unsigned char> tmp = base64_decode_to_bytes(b64_illegit);
-        std::string tmp_utf8(tmp.begin(), tmp.end());
-        illegit_w = wstring_from_utf8(tmp_utf8);
-        secure_zero_vector(tmp);
-        secure_zero_string(tmp_utf8);
+        print_fragments(fail_fragments);
+        ExitProcess(1);
     }
 
-    // If any VirtualLock/obfuscation checks required a lock, you'd handle it in ObfuscatedSecret
-    // For the secret parts we want them as base64 text in memory (locked inside ObfuscatedSecret).
-    // Now check VirtualLock success - we did VirtualLock inside constructor.
+    print_fragments(prompt_fragments);
+    std::string input;
+    std::getline(std::cin, input);
+    std::string input_b64 = base64_encode(input);
 
-    // If a debugger was detected earlier, show illegit and exit
-    if (debuggerDetected) {
-        PrintWide(illegit_w);
-        // clear everything
-        secure_zero_string(b64_legit); secure_zero_string(b64_illegit); secure_zero_string(b64_prompt);
-        return 1;
-    }
-
-    // decode prompt
-    std::wstring prompt_w;
-    {
-        std::vector<unsigned char> tmp = base64_decode_to_bytes(b64_prompt);
-        std::string tmp_utf8(tmp.begin(), tmp.end());
-        prompt_w = wstring_from_utf8(tmp_utf8);
-        secure_zero_vector(tmp);
-        secure_zero_string(tmp_utf8);
-    }
-
-    // Show prompt (from decoded base64)
-    PrintWide(prompt_w);
-
-    std::wstring input;
-    std::getline(std::wcin, input);
-
-    // re-run anti-debug checks
+    // Recheck debugger after input
     debuggerDetected |= (IsDebuggerPresent() != 0);
     debuggerDetected |= check_peb_being_debugged();
     debuggerDetected |= !veh_breakpoint_test();
@@ -471,57 +285,25 @@ int wmain()
     debuggerDetected |= check_process_debug_port_via_nt();
     debuggerDetected |= any_thread_has_hw_breakpoints();
 
-    if (debuggerDetected) {
-        PrintWide(illegit_w);
-        secure_zero_string(b64_legit); secure_zero_string(b64_illegit); secure_zero_string(b64_prompt);
-        return 1;
+    if (debuggerDetected)
+    {
+        print_fragments(fail_fragments);
+        ExitProcess(1);
     }
 
-    // base64-encode user input (convert to UTF-8 then base64)
-    std::string input_utf8 = utf8_from_wstring(input);
-    std::string input_b64 = base64_encode_bytes((const unsigned char*)input_utf8.data(), input_utf8.size());
+    std::string secret_b64 = reconstruct_secret();
 
-    // Create ObfuscatedSecret instances for the secret parts (they decode to base64 text)
-    ObfuscatedSecret p1(secret_part1_obf, sizeof(secret_part1_obf), KEY);
-    ObfuscatedSecret p2(secret_part2_obf, sizeof(secret_part2_obf), KEY);
-    ObfuscatedSecret p3(secret_part3_obf, sizeof(secret_part3_obf), KEY);
-    ObfuscatedSecret p4(secret_part4_obf, sizeof(secret_part4_obf), KEY);
-
-    // If you replaced message base64 strings with obfuscated arrays,
-    // you'd do the same: ObfuscatedSecret legit_msg_obf(...); std::wstring legit = legit_msg_obf.reveal_wstring();
-
-    // get base64 parts as std::string from the ObfuscatedSecret objects:
-    std::string a = p1.get_base64_text();
-    std::string b = p2.get_base64_text();
-    std::string c = p3.get_base64_text();
-    std::string d = p4.get_base64_text();
-
-    if (debuggerDetected) {
-        PrintWide(illegit_w);
-        p1.secure_clear(); p2.secure_clear(); p3.secure_clear(); p4.secure_clear();
-        secure_zero_string(b64_legit); secure_zero_string(b64_illegit); secure_zero_string(b64_prompt);
-        return 1;
+    if (constant_time_compare(input_b64, secret_b64))
+    {
+        print_fragments(access_fragments);
+    }
+    else
+    {
+        print_fragments(fail_fragments);
     }
 
-    // constant-time split compare
-    bool ok = constant_time_equal_split_b64(input_b64, a, b, c, d);
-
-    // cleanup
-    p1.secure_clear(); p2.secure_clear(); p3.secure_clear(); p4.secure_clear();
-    secure_zero_string(input_b64);
-    secure_zero_string(input_utf8);
-    secure_zero_string(b64_legit); secure_zero_string(b64_illegit); secure_zero_string(b64_prompt);
-
-    if (ok) {
-        PrintWide(legit_w);
-    }
-    else {
-        PrintWide(illegit_w);
-    }
-
-    PrintWide(L"Press Enter to exit...");
-    std::wstring dummy;
-    std::getline(std::wcin, dummy);
+    print_fragments(exit_fragments);
+    std::getline(std::cin, input);
 
     return debuggerDetected ? 1 : 0;
 }
