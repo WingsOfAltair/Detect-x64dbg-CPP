@@ -174,15 +174,6 @@ void a14(const std::wstring& s)
     WriteConsoleW(hOut, &nl, 1, &written, nullptr);
 }
 
-bool a15()
-{
-    std::string v = a13("ANTI_DEBUG");
-    if (v.empty()) return true;
-    if (v == "0" || _stricmp(v.c_str(), "false") == 0 || _stricmp(v.c_str(), "no") == 0)
-        return false;
-    return true;
-}
-
 volatile LONG a16 = 0;
 PVOID a17 = nullptr;
 
