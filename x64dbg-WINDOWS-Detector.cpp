@@ -197,15 +197,6 @@ void PrintWide(const std::wstring& s)
     WriteConsoleW(hOut, &nl, 1, &written, nullptr);
 }
 
-bool anti_debug_env_enabled()
-{
-    std::string v = safe_getenv("ANTI_DEBUG");
-    if (v.empty()) return true;
-    if (v == "0" || _stricmp(v.c_str(), "false") == 0 || _stricmp(v.c_str(), "no") == 0)
-        return false;
-    return true;
-}
-
 volatile LONG g_veh_seen_bp = 0;
 PVOID g_veh_handle = nullptr;
 
