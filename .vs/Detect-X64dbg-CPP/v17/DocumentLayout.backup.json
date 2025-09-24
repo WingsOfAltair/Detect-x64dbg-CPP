@@ -5,6 +5,9 @@
     {
       "AbsoluteMoniker": "D:0:0:{FE0DB549-2CAB-4162-8266-EA4990D1A01B}|Detect-X64dbg-CPP.vcxproj|D:\\GitHub\\Detect-x64dbg-CPP\\x64dbg-WINDOWS-Detector.cpp||{D0E1A5C6-B359-4E41-9B60-3365922C2A22}",
       "RelativeMoniker": "D:0:0:{FE0DB549-2CAB-4162-8266-EA4990D1A01B}|Detect-X64dbg-CPP.vcxproj|solutionrelative:x64dbg-WINDOWS-Detector.cpp||{D0E1A5C6-B359-4E41-9B60-3365922C2A22}"
+    },
+    {
+      "AbsoluteMoniker": "D:0:0:{A2FE74E1-B743-11D0-AE1A-00A0C90FFFC3}|\u003CMiscFiles\u003E|C:\\Program Files\\Microsoft Visual Studio\\2022\\Enterprise\\VC\\Tools\\MSVC\\14.44.35207\\include\\xstring||{3B902123-F8A7-4915-9F01-361F908088D0}|"
     }
   ],
   "DocumentGroupContainers": [
@@ -14,7 +17,7 @@
       "DocumentGroups": [
         {
           "DockedWidth": 200,
-          "SelectedChildIndex": 27,
+          "SelectedChildIndex": 28,
           "Children": [
             {
               "$type": "Bookmark",
@@ -126,15 +129,26 @@
             },
             {
               "$type": "Document",
+              "DocumentIndex": 1,
+              "Title": "xstring",
+              "DocumentMoniker": "C:\\Program Files\\Microsoft Visual Studio\\2022\\Enterprise\\VC\\Tools\\MSVC\\14.44.35207\\include\\xstring",
+              "ToolTip": "C:\\Program Files\\Microsoft Visual Studio\\2022\\Enterprise\\VC\\Tools\\MSVC\\14.44.35207\\include\\xstring",
+              "ViewState": "AgIAAAECAAAAAAAAAAAWwBICAAAAAAAAAAAAAA==",
+              "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.001001|",
+              "WhenOpened": "2025-09-24T09:10:44.529Z",
+              "EditorCaption": ""
+            },
+            {
+              "$type": "Document",
               "DocumentIndex": 0,
               "Title": "x64dbg-WINDOWS-Detector.cpp",
               "DocumentMoniker": "D:\\GitHub\\Detect-x64dbg-CPP\\x64dbg-WINDOWS-Detector.cpp",
               "RelativeDocumentMoniker": "x64dbg-WINDOWS-Detector.cpp",
               "ToolTip": "D:\\GitHub\\Detect-x64dbg-CPP\\x64dbg-WINDOWS-Detector.cpp",
               "RelativeToolTip": "x64dbg-WINDOWS-Detector.cpp",
-              "ViewState": "AgIAAAkBAAAAAAAAAAAAAAsAAAAAAAAAAAAAAA==",
+              "ViewState": "AgIAAOABAAAAAAAAAAAAAPIBAABCAAAAAAAAAA==",
               "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.000677|",
-              "WhenOpened": "2025-09-22T09:52:42.03Z",
+              "WhenOpened": "2025-09-23T05:52:34.294Z",
               "EditorCaption": ""
             }
           ]
