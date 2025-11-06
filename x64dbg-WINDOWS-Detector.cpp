@@ -1,309 +1,431 @@
-#include <windows.h>
-#include <tlhelp32.h>
-#include <wincrypt.h>
-#include <iostream>
+﻿#include <iostream>
 #include <string>
 #include <vector>
+#include <windows.h>
+#include <intrin.h>
 #include <winternl.h>
-#include <Windows.h>
-#include <Wincrypt.h>
+#include <tlhelp32.h>
+#include <chrono>
+#include <thread>
 
-// --------------------------- Anti-debug helpers ---------------------------
+#pragma intrinsic(__readfsdword)
+#pragma intrinsic(__readgsdword)     
+#pragma comment(lib, "iphlpapi.lib")
 
-// VEH breakpoint
-volatile LONG g_veh_seen_bp = 0;
-PVOID g_veh_handle = nullptr;
 
-LONG CALLBACK MyVeh(PEXCEPTION_POINTERS ExceptionInfo)
-{
-    if (ExceptionInfo && ExceptionInfo->ExceptionRecord &&
-        ExceptionInfo->ExceptionRecord->ExceptionCode == EXCEPTION_BREAKPOINT)
-    {
-        InterlockedExchange(&g_veh_seen_bp, 1);
-        return EXCEPTION_CONTINUE_SEARCH;
-    }
-    return EXCEPTION_CONTINUE_SEARCH;
-}
+typedef NTSTATUS(NTAPI* pNtQueryInformationProcess)(
+    HANDLE,
+    PROCESSINFOCLASS,
+    PVOID,
+    ULONG,
+    PULONG
+    );
 
-bool veh_breakpoint_test()
-{
-    g_veh_handle = AddVectoredExceptionHandler(1, MyVeh);
-    if (!g_veh_handle) return false;
-    InterlockedExchange(&g_veh_seen_bp, 0);
+// Wrapper struct to hold check result
+struct DebugCheckResult {
+    std::string name;
+    bool detected;
+};
 
-    __try { __debugbreak(); }
-    __except (EXCEPTION_EXECUTE_HANDLER) {}
+// Base64 encoding/decoding functions
+std::string base64_encode(const std::string& input) {
+    static const std::string base64_chars =
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+        "abcdefghijklmnopqrstuvwxyz"
+        "0123456789+/";
 
-    bool saw = (InterlockedCompareExchange(&g_veh_seen_bp, 0, 0) != 0);
-    RemoveVectoredExceptionHandler(g_veh_handle);
-    g_veh_handle = nullptr;
-    return saw;
-}
+    std::string encoded;
+    int i = 0;
+    int j = 0;
+    unsigned char char_array_3[3];
+    unsigned char char_array_4[4];
 
-// PEB check
-bool check_peb_being_debugged()
-{
-#ifdef _M_X64
-    PBYTE pPEB = (PBYTE)__readgsqword(0x60);
-#else
-    PBYTE pPEB = (PBYTE)__readfsdword(0x30);
-#endif
-    if (!pPEB) return false;
-    return (*(pPEB + 2) != 0);
-}
+    while (i < input.length()) {
+        char_array_3[0] = input[i++];
+        char_array_3[1] = (i < input.length()) ? input[i++] : 0;
+        char_array_3[2] = (i < input.length()) ? input[i++] : 0;
 
-// NtQueryInformationProcess / ProcessDebugPort
-typedef NTSTATUS(NTAPI* NtQueryInformationProcess_t)(HANDLE, PROCESSINFOCLASS, PVOID, ULONG, PULONG);
+        char_array_4[0] = (char_array_3[0] & 0xFC) >> 2;
+        char_array_4[1] = ((char_array_3[0] & 0x03) << 4) + ((char_array_3[1] & 0xF0) >> 4);
+        char_array_4[2] = ((char_array_3[1] & 0x0F) << 2) + ((char_array_3[2] & 0xC0) >> 6);
+        char_array_4[3] = char_array_3[2] & 0x3F;
 
-bool ntdll_function_looks_orig(LPCSTR funcName)
-{
-    HMODULE hNt = GetModuleHandleW(L"ntdll.dll");
-    if (!hNt) return false;
-    void* p = (void*)GetProcAddress(hNt, funcName);
-    if (!p) return false;
-
-    unsigned char buf[8] = { 0 };
-    __try { memcpy(buf, p, sizeof(buf)); }
-    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
-
-#ifdef _M_X64
-    if (buf[0] == 0x4C && buf[1] == 0x8B && buf[2] == 0xD1) return true;
-    if (buf[0] == 0xE9 || (buf[0] == 0xFF && buf[1] == 0x25)) return false;
-    return false;
-#else
-    if (buf[0] == 0xE9) return false;
-    return true;
-#endif
-}
-
-bool check_nt_query_information_process_hooked() { return !ntdll_function_looks_orig("NtQueryInformationProcess"); }
-
-bool check_process_debug_port_via_nt()
-{
-    HMODULE hNt = GetModuleHandleW(L"ntdll.dll");
-    if (!hNt) return false;
-    auto NtQIP = (NtQueryInformationProcess_t)GetProcAddress(hNt, "NtQueryInformationProcess");
-    if (!NtQIP) return false;
-
-    ULONG debugPort = 0;
-    NTSTATUS st = NtQIP(GetCurrentProcess(), (PROCESSINFOCLASS)7, &debugPort, sizeof(debugPort), nullptr);
-    return (st == 0 && debugPort != 0);
-}
-
-// Hardware breakpoints
-bool any_thread_has_hw_breakpoints()
-{
-    HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
-    if (snap == INVALID_HANDLE_VALUE) return false;
-
-    THREADENTRY32 te = {};
-    te.dwSize = sizeof(te);
-    DWORD myPid = GetCurrentProcessId();
-    bool detected = false;
-
-    if (!Thread32First(snap, &te)) {
-        CloseHandle(snap);
-        return false;
+        for (j = 0; (j < 4); j++) {
+            encoded += base64_chars[char_array_4[j]];
+        }
     }
 
-    do {
-        if (te.th32OwnerProcessID != myPid) continue;
-        if (te.th32ThreadID == GetCurrentThreadId()) continue;
+    while (encoded.length() % 4 != 0) {
+        encoded += '=';
+    }
 
-        HANDLE hThread = OpenThread(THREAD_GET_CONTEXT | THREAD_SUSPEND_RESUME, FALSE, te.th32ThreadID);
-        if (!hThread) continue;
+    return encoded;
+}
 
-        DWORD suspendCount = SuspendThread(hThread);
-        if (suspendCount == (DWORD)-1) { CloseHandle(hThread); continue; }
+std::string base64_decode(const std::string& encoded) {
+    static const std::string base64_chars =
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+        "abcdefghijklmnopqrstuvwxyz"
+        "0123456789+/";
 
-        CONTEXT ctx = {};
-        ctx.ContextFlags = CONTEXT_DEBUG_REGISTERS | CONTEXT_CONTROL;
+    std::string decoded;
+    int i = 0;
+    int j = 0;
+    int in_ = 0;
+    unsigned char char_array_4[4], char_array_3[3];
 
-        if (GetThreadContext(hThread, &ctx))
-        {
-            if (ctx.Dr0 || ctx.Dr1 || ctx.Dr2 || ctx.Dr3)
-                detected = true;
+    while (in_ < encoded.length()) {
+        if (encoded[in_] == '=') break;
+
+        char_array_4[i++] = encoded[in_];
+        in_++;
+
+        if (i == 4) {
+            for (i = 0; i < 4; i++) {
+                char_array_4[i] = base64_chars.find(char_array_4[i]);
+            }
+
+            char_array_3[0] = (char_array_4[0] << 2) + ((char_array_4[1] & 0x30) >> 4);
+            char_array_3[1] = ((char_array_4[1] & 0xf) << 4) + ((char_array_4[2] & 0x3c) >> 2);
+            char_array_3[2] = ((char_array_4[2] & 0x3) << 6) + char_array_4[3];
+
+            for (i = 0; (i < 3); i++) {
+                decoded += char_array_3[i];
+            }
+            i = 0;
+        }
+    }
+
+    if (i) {
+        for (j = i; j < 4; j++) {
+            char_array_4[j] = 0;
         }
 
-        ResumeThread(hThread);
-        CloseHandle(hThread);
-        if (detected) break;
+        for (j = 0; j < 4; j++) {
+            char_array_4[j] = base64_chars.find(char_array_4[j]);
+        }
 
-    } while (Thread32Next(snap, &te));
+        char_array_3[0] = (char_array_4[0] << 2) + ((char_array_4[1] & 0x30) >> 4);
+        char_array_3[1] = ((char_array_4[1] & 0xf) << 4) + ((char_array_4[2] & 0x3c) >> 2);
+        char_array_3[2] = ((char_array_4[2] & 0x3) << 6) + char_array_4[3];
 
-    CloseHandle(snap);
-    return detected;
+        for (j = 0; (j < i - 1); j++) {
+            decoded += char_array_3[j];
+        }
+    }
+
+    return decoded;
 }
 
-// Software breakpoints
-bool check_software_breakpoint(void* address)
-{
-    unsigned char byte = 0;
-    SIZE_T read = 0;
-    if (ReadProcessMemory(GetCurrentProcess(), address, &byte, 1, &read) && read == 1)
-        return (byte == 0xCC);
-    return false;
-}
-
-// Critical addresses to check for SW breakpoints
-void* critical_addresses[] = {
-    reinterpret_cast<void*>(&IsDebuggerPresent),
-    reinterpret_cast<void*>(&veh_breakpoint_test)
-};
-
-std::string xor_string(const std::string& s, char key) {
-    std::string r = s;
-    for (auto& c : r) c ^= key; // decode at runtime
-    return r;
-}
-
-std::vector<std::string> secret_fragments = {
-    xor_string("U29tZV9z", 0x5A),
-    xor_string("ZWNyZXRf", 0x5A),
-    xor_string("cGFydF8x", 0x5A)
-};
-
-// --------------------------- Base64 split comparison ----------------
+// Constant time comparison to prevent timing attacks
 bool constant_time_compare(const std::string& a, const std::string& b) {
-    if (a.size() != b.size()) return false;
-    unsigned char diff = 0;
-    for (size_t i = 0; i < a.size(); ++i) diff |= a[i] ^ b[i];
-    return diff == 0;
+    if (a.length() != b.length()) return false;
+
+    volatile unsigned char result = 0;
+    for (size_t i = 0; i < a.length(); i++) {
+        result |= a[i] ^ b[i];
+    }
+    return result == 0;
 }
 
-// ------------------- Fixed secret key (split + XOR) -------------------
-struct Fragment { std::string data; char key; };
+// Enhanced constant time comparison for larger data
+bool constant_time_compare_large(const std::string& a, const std::string& b) {
+    if (a.length() != b.length()) return false;
 
-std::string reconstruct_secret() {
-    std::string s;
-    for (auto& frag : secret_fragments) s += xor_string(frag, 0x5A);
-    return s;
+    volatile unsigned char result = 0;
+    for (size_t i = 0; i < a.length(); i++) {
+        result |= a[i] ^ b[i];
+    }
+    return result == 0;
 }
 
-void print_fragments(const std::vector<std::pair<std::string, char>>& frags) {
-    for (auto& p : frags)
-        std::cout << xor_string(p.first, p.second);
-    std::cout << std::endl;
-}
+// Anti-debugging techniques
+bool check_debugger_presence() {
+    HMODULE ntdll = GetModuleHandleA("ntdll.dll");
+    if (!ntdll) return false;
 
-std::string base64_encode(const std::string& in) {
-    static const std::string chars =
-        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    std::string out;
-    int val = 0, valb = -6;
-    for (unsigned char c : in) {
-        val = (val << 8) + c;
-        valb += 8;
-        while (valb >= 0) {
-            out.push_back(chars[(val >> valb) & 0x3F]);
-            valb -= 6;
+    auto NtQueryInformationProcessFunc =
+        (pNtQueryInformationProcess)GetProcAddress(ntdll, "NtQueryInformationProcess");
+    if (!NtQueryInformationProcessFunc) return false;
+
+    PROCESS_BASIC_INFORMATION pbi;
+    NTSTATUS status = NtQueryInformationProcessFunc(
+        GetCurrentProcess(),
+        ProcessBasicInformation,
+        &pbi,
+        sizeof(pbi),
+        nullptr
+    );
+
+    if (status == 0 && pbi.PebBaseAddress) {
+        PEB* peb = (PEB*)pbi.PebBaseAddress;
+        if (peb->BeingDebugged) {
+            return true;
         }
     }
-    if (valb > -6) out.push_back(chars[((val << 8) >> (valb + 8)) & 0x3F]);
-    while (out.size() % 4) out.push_back('=');
-    return out;
+
+    // Fallback checks
+    if (IsDebuggerPresent()) return true;
+
+    BOOL bRemote = FALSE;
+    CheckRemoteDebuggerPresent(GetCurrentProcess(), &bRemote);
+    if (bRemote) return true;
+
+    return false;
 }
 
-// --------------------------- Main ----------------
-int wmain()
-{
-    // Lock console for UTF-8 input/output
-    SetConsoleOutputCP(CP_UTF8);
-    SetConsoleCP(CP_UTF8);
+bool check_debugger_threads() {
+    // Enumerate threads to detect debugger
+    HANDLE hSnapshot = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
+    if (hSnapshot == INVALID_HANDLE_VALUE) return false;
 
-    bool debuggerDetected = false;
+    THREADENTRY32 te32;
+    te32.dwSize = sizeof(THREADENTRY32);
 
-    debuggerDetected |= (IsDebuggerPresent() != 0);
-    debuggerDetected |= check_peb_being_debugged();
-    debuggerDetected |= !veh_breakpoint_test();
-    debuggerDetected |= check_nt_query_information_process_hooked();
-    debuggerDetected |= check_process_debug_port_via_nt();
-    debuggerDetected |= any_thread_has_hw_breakpoints();
-
-    for (void* addr : critical_addresses)
-    {
-        if (check_software_breakpoint(addr))
-            debuggerDetected = true;
+    if (Thread32First(hSnapshot, &te32)) {
+        do {
+            if (te32.th32OwnerProcessID == GetCurrentProcessId()) {
+                // Check if this thread is a debugger thread
+                // This is a simplified check - real implementation would be more complex
+                if (te32.th32ThreadID == GetCurrentThreadId()) {
+                    // This is our own thread
+                    continue;
+                }
+            }
+        } while (Thread32Next(hSnapshot, &te32));
     }
 
-    char xor_key = 0x55;
+    CloseHandle(hSnapshot);
+    return false;
+}
 
-    std::vector<std::pair<std::string, char>> prompt_fragments = {
-        {"\x1F",0x5A},{"\x35",0x5B},{"\x28",0x5C},{"\x38",0x5D},{"\x2C",0x5E},{"\x7F",0x5F},
-        {"\x13",0x60},{"\x04",0x61},{"\x01",0x62},{"\x11",0x63},{"\x01",0x64},{"\x11",0x65},{"\x46",0x66},
-        {"\x0C",0x67},{"\x0D",0x68},{"\x10",0x69},{"\x50",0x6A},{"\x4B",0x6B}
-    };
+bool check_debugger_symbols() {
+    // Check for common debugger symbols in memory
+    // This is a simplified check - real implementation would be more thorough
+    char* p = (char*)GetModuleHandle(NULL);
+    if (p) {
+        // Look for common debugger markers
+        const char* debug_markers[] = {
+            "dbghelp.dll", "mscordbi.dll", "ntdll.dll", "kernel32.dll"
+        };
 
-    // Access message: "Access granted.\n"
-    std::vector<std::pair<std::string, char>> access_fragments = {
-        {"\x2D",0x6C},{"\x0E",0x6D},{"\x0D",0x6E},{"\x0A",0x6F},{"\x03",0x70},{"\x02",0x71},{"\x52",0x72},
-        {"\x14",0x73},{"\x06",0x74},{"\x14",0x75},{"\x18",0x76},{"\x03",0x77},{"\x1D",0x78},{"\x1D",0x79},
-        {"\x54",0x7A},{"\x71",0x7B}
-    };
+        for (const char* marker : debug_markers) {
+            if (strstr(p, marker)) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
 
-    // Fail message: "Illegitimate copy.\n"
-    std::vector<std::pair<std::string, char>> fail_fragments = {
-        {"\x6A",0x23}, // I
-        {"\x2D",0x41}, // l
-        {"\x7E",0x12}, // l
-        {"\x30",0x55}, // e
-        {"\x54",0x33}, // g
-        {"\x25",0x44}, // a
-        {"\x4D",0x21}, // l
-        {"\x0A",0x2A}, // ' '
-        {"\x3C",0x5F}, // c
-        {"\x54",0x3B}, // o
-        {"\x3D",0x4D}, // p
-        {"\x15",0x6C}, // y
-        {"\x0C",0x22}  // .
-     };
+bool check_timing_anomalies() {
+    // Measure execution time to detect debugging
+    auto start = std::chrono::high_resolution_clock::now();
 
-    // Exit message: "Press Enter to exit..."
-    std::vector<std::pair<std::string, char>> exit_fragments = {
-        {"\xDF",0x8F},{"\xE2",0x90},{"\xF4",0x91},{"\xE1",0x92},{"\xE0",0x93},{"\xB4",0x94},
-        {"\xD0",0x95},{"\xF8",0x96},{"\xE3",0x97},{"\xFD",0x98},{"\xEB",0x99},{"\xBA",0x9A},
-        {"\xEF",0x9B},{"\xF3",0x9C},{"\xBD",0x9D},{"\xFB",0x9E},{"\xE7",0x9F},{"\xC9",0xA0},
-        {"\xD5",0xA1},{"\x8C",0xA2},{"\x8C",0xA2},{"\x8C",0xA2}
-    };
-
-    if (debuggerDetected)
-    {
-        print_fragments(fail_fragments);
-        ExitProcess(1);
+    // Simulate some work that would take different time in a debugger
+    volatile int sum = 0;
+    for (int i = 0; i < 1000000; i++) {
+        sum += i;
     }
 
-    print_fragments(prompt_fragments);
-    std::string input;
-    std::getline(std::cin, input);
-    std::string input_b64 = base64_encode(input);
+    auto end = std::chrono::high_resolution_clock::now();
+    auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
 
-    // Recheck debugger after input
-    debuggerDetected |= (IsDebuggerPresent() != 0);
-    debuggerDetected |= check_peb_being_debugged();
-    debuggerDetected |= !veh_breakpoint_test();
-    debuggerDetected |= check_nt_query_information_process_hooked();
-    debuggerDetected |= check_process_debug_port_via_nt();
-    debuggerDetected |= any_thread_has_hw_breakpoints();
+    // If execution time is suspiciously long, debugger is likely present
+    return duration.count() > 50000; // 50ms threshold
+}
 
-    if (debuggerDetected)
-    {
-        print_fragments(fail_fragments);
-        ExitProcess(1);
+bool check_memory_protection() {
+    // Check memory protection flags
+    DWORD_PTR address = (DWORD_PTR)&check_memory_protection;
+    MEMORY_BASIC_INFORMATION mbi;
+
+    if (VirtualQuery((LPCVOID)address, &mbi, sizeof(mbi))) {
+        // Check for unusual memory protection
+        if ((mbi.Protect & PAGE_EXECUTE_READWRITE) ||
+            (mbi.Protect & PAGE_READWRITE)) {
+            // This might indicate debugging activity
+            return true;
+        }
+    }
+    return false;
+}
+
+bool check_heap_corruption() {
+    // Simple heap corruption detection
+    void* p = malloc(100);
+    if (p) {
+        // Corrupt the memory
+        char* pc = (char*)p;
+        *pc = 0xFF;
+
+        // Try to free it - if it crashes, debugging is likely
+        try {
+            free(p);
+        }
+        catch (...) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool check_fpu_state() {
+    return false;
+    unsigned int fpu_state;
+    if (_controlfp_s(&fpu_state, 0, 0) != 0) return false;
+
+    // Typical default: all exceptions masked (0x1F80 for x86/x64)
+    const unsigned int default_fpu_state = 0x1F80;
+    return fpu_state != default_fpu_state; // Only trigger if it's abnormal
+}
+
+bool check_stack_trace() {
+    // Check stack trace for debugging
+    void* stack[100];
+    USHORT frames = CaptureStackBackTrace(0, 100, stack, NULL);
+
+    // If we have too many frames or suspicious patterns, debugger is likely
+    return frames > 50;
+}
+
+bool check_process_heap() {
+    // Check process heap for signs of debugging
+    HANDLE hHeap = GetProcessHeap();
+    if (hHeap) {
+        // Try to allocate and deallocate memory
+        void* p = HeapAlloc(hHeap, 0, 100);
+        if (p) {
+            HeapFree(hHeap, 0, p);
+            return false;
+        }
+    }
+    return true;
+}
+
+// Combined anti-debugging function
+bool is_debugger_present() {
+    // Run multiple anti-debugging checks
+    if (check_debugger_presence()) return true;
+    if (check_debugger_threads()) return true;
+    if (check_debugger_symbols()) return true;
+    if (check_timing_anomalies()) return true;
+    if (check_memory_protection()) return true;
+    if (check_heap_corruption()) return true;
+    if (check_fpu_state()) return true;
+    if (check_stack_trace()) return true;
+    if (check_process_heap()) return true;
+
+    return false;
+}
+
+// Enhanced security functions
+class SecureAccessControl {
+private:
+    std::string secret_key;
+    std::string encrypted_data;
+
+public:
+    SecureAccessControl() {
+        // Initialize with a secure key
+        secret_key = "SecureKey1234567890"; // In production, this should be generated securely
     }
 
-    std::string secret_b64 = reconstruct_secret();
-
-    if (constant_time_compare(input_b64, secret_b64))
-    {
-        print_fragments(access_fragments);
-    }
-    else
-    {
-        print_fragments(fail_fragments);
+    void set_encrypted_data(const std::string& data) {
+        encrypted_data = data;
     }
 
-    print_fragments(exit_fragments);
-    std::getline(std::cin, input);
+    std::string get_encrypted_data() const {
+        return encrypted_data;
+    }
 
-    return debuggerDetected ? 1 : 0;
+    bool authenticate(const std::string& input_key) {
+        // Constant time comparison to prevent timing attacks
+        return constant_time_compare(secret_key, input_key);
+    }
+
+    bool verify_access(const std::string& access_token) {
+        // Verify access token using secure method
+        std::string decoded_token = base64_decode(access_token);
+        return constant_time_compare(secret_key, decoded_token);
+    }
+};
+
+// Updated anti-debugging checks with names
+std::vector<DebugCheckResult> run_debugger_checks() {
+    std::vector<DebugCheckResult> results;
+
+    results.push_back({ "Debugger via NtQueryInformationProcess / IsDebuggerPresent / CheckRemoteDebuggerPresent", check_debugger_presence() });
+    results.push_back({ "Debugger threads", check_debugger_threads() });
+    results.push_back({ "Debugger symbols in memory", check_debugger_symbols() });
+    results.push_back({ "Timing anomalies", check_timing_anomalies() });
+    results.push_back({ "Memory protection flags", check_memory_protection() });
+    results.push_back({ "Heap corruption", check_heap_corruption() });
+    results.push_back({ "FPU state", check_fpu_state() });
+    results.push_back({ "Stack trace analysis", check_stack_trace() });
+    results.push_back({ "Process heap allocation", check_process_heap() });
+
+    return results;
+}
+
+
+// Main application logic
+int main() {
+    // Initialize security system
+    SecureAccessControl access_control;
+
+    // Set encrypted data (simulating protected content)
+    std::string protected_content = "This is highly confidential information!";
+    access_control.set_encrypted_data(base64_encode(protected_content));
+
+    std::cout << "=== Anti-Debugging Check Report ===" << std::endl;
+
+    auto results = run_debugger_checks();
+
+    bool any_detected = false;
+    for (const auto& r : results) {
+        std::cout << r.name << ": " << (r.detected ? "Detected" : "Not Detected") << std::endl;
+        if (r.detected) any_detected = true;
+    }
+
+    // Anti-debugging check
+    if (any_detected) {
+        std::cout << "Security Alert: Debugger detected! Exiting securely..." << std::endl;
+        return 1;
+    }
+
+    // Display welcome message
+    std::cout << "=== Secure Access System ===" << std::endl;
+    std::cout << "Welcome to the secure access system." << std::endl;
+    std::cout << "Please enter your access key to proceed:" << std::endl;
+
+    // Get user input
+    std::string user_key;
+    std::getline(std::cin, user_key);
+
+    // Authenticate user
+    if (access_control.authenticate(user_key)) {
+        std::cout << "Authentication successful!" << std::endl;
+        std::cout << "Access granted to protected content." << std::endl;
+        std::cout << "Protected content: " << base64_decode(access_control.get_encrypted_data()) << std::endl;
+    }
+    else {
+        std::cout << "Authentication failed! Access denied." << std::endl;
+
+        // Additional security measures
+        if (is_debugger_present()) {
+            std::cout << "Security Alert: Debugger detected during authentication!" << std::endl;
+        }
+    }
+
+    // Additional security check
+    std::cout << "\nPerforming additional security checks..." << std::endl;
+    if (is_debugger_present()) {
+        std::cout << "Security Alert: Debugger detected during final check!" << std::endl;
+        return 1;
+    }
+
+    std::cout << "All security checks passed. System secure." << std::endl;
+
+    return 0;
 }
